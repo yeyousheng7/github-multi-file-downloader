@@ -44,6 +44,7 @@
     debugLog("Github Downloader 脚本启动");
 
     setTimeout(() => {
+        apply();
         observeRootChanges();
     }, 1000);
 
@@ -109,7 +110,14 @@
     }
 
     function addCheckboxToRow(rowElement, rowId, disabled = false) {
-        if (rowElement.querySelector('.tm-left-cb')) return;
+        if(!rowElement) {
+            debugLog(`行元素 ${rowId} 为空, 退出`);
+            return;
+        }
+        if (rowElement.querySelector('.tm-left-cb')) {
+            debugLog(`行元素 ${rowId} 已存在复选框, 退出`);
+            return;
+        }
 
         const td = document.createElement('td');
         const refCell = rowElement.firstElementChild;
@@ -154,7 +162,10 @@
         }
 
         headTr.insertBefore(th, headTr.firstElementChild);
+        fixColumnWidths(table);
+    }
 
+    function fixColumnWidths(table) {
         // 将 colspan += 1, 以适应新增的复选框列
         const commitInfoRow = table.querySelector(githubAtrribute.githubCommitInfoRowCss);
         commitInfoRow?.querySelectorAll('td').forEach(td => {
@@ -166,6 +177,17 @@
             }
         });
     }
+
+    function downloadUrl(url, filename) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || '';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
+
 
 
     function debugLog(msg) {
