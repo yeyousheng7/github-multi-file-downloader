@@ -18,6 +18,10 @@
 
     // Github 页面元素属性
     const githubAtrribute = {
+        // 页面根级元素 ID
+        githubRootId: "repo-content-pjax-container",
+
+        // 代码表格 CSS
         githubTableCss: ".Table-module__Box--KyMHK", 
 
         // 文件夹或文件行 CSS
@@ -40,43 +44,51 @@
     debugLog("Github Downloader 脚本启动");
 
     setTimeout(() => {
-        initCheckboxes();
+        observeRootChanges();
     }, 1000);
 
+    function observeRootChanges() {
+        const root = document.getElementById(githubAtrribute.githubRootId);
+        if (!root) {
+            debugLog("未找到页面根级元素, 退出");
+            return;
+        }
+        if (root.dataset.tmObserved === '1') return;
+        root.dataset.tmObserved = '1';
 
-    function initCheckboxes() {
-        // 获取代码表格元素
-        const codeTable = document.querySelector(githubAtrribute.githubTableCss);
-        if (!codeTable) {
+        let t = null;
+        const schedule = () => {
+            clearTimeout(t);
+            t = setTimeout(apply, 50); // 简单防抖：DOM 连续变化时只跑一次
+        };
+
+        const obs = new MutationObserver(schedule);
+        obs.observe(root, { childList: true, subtree: true });
+
+        window.addEventListener('popstate', schedule);
+
+        schedule();
+    }
+
+    function apply() {
+        const table = document.querySelector(githubAtrribute.githubTableCss);
+        if (!table) {
             debugLog("未找到代码表格元素, 退出");
             return;
         }
-        debugLog("成功获取代码表格元素");
 
-        // 确保表头有复选框列
-        ensureHeader(codeTable);
+        ensureHeader(table);
+        addCheckboxes(table);
+    }
 
-        // 将 colspan += 1, 以适应新增的复选框列
-        const commitInfoRow = codeTable.querySelector(githubAtrribute.githubCommitInfoRowCss);
-        commitInfoRow?.querySelectorAll('td').forEach(td => {
-            const colspan = td.getAttribute('colspan');
-            if (colspan) {
-                const newColspan = parseInt(colspan) + 1;
-                td.setAttribute('colspan', newColspan.toString());
-                debugLog(`更新提交信息行的 colspan 为 ${newColspan}`);
-            }
-        });
-
-        const parentDirRow = codeTable.querySelector(githubAtrribute.githubParentDirRowCss);
-
-        // 如果在子目录层级，禁用上一级目录的复选框
-        if(parentDirRow) {
-            addCheckboxToRow(parentDirRow, "parent-dir-row", true);
-            debugLog("在上一级目录行添加禁用的复选框");
+    function addCheckboxes(table) {
+        if (!table) {
+            debugLog("代码表格元素为空, 退出");
+            return;
         }
 
         // 遍历文件行, 添加复选框
-        const fileRows = codeTable.querySelectorAll(githubAtrribute.githubFileRowCss);
+        const fileRows = table.querySelectorAll(githubAtrribute.githubFileRowCss);
         debugLog(`找到 ${fileRows.length} 个文件行元素`);
 
         for(let i = 0; i < fileRows.length; i++) {
@@ -85,6 +97,14 @@
             
             addCheckboxToRow(row, rowId);
             debugLog(`在行 ${rowId} 添加复选框`);
+        }
+
+        const parentDirRow = table.querySelector(githubAtrribute.githubParentDirRowCss);
+
+        // 如果在子目录层级，禁用上一级目录的复选框
+        if(parentDirRow) {
+            addCheckboxToRow(parentDirRow, "parent-dir-row", true);
+            debugLog("在上一级目录行添加禁用的复选框");
         }
     }
 
@@ -106,28 +126,46 @@
     }
 
     function ensureHeader(table) {
-        const headTr = table?.querySelector('thead tr');
+        if(!table) {
+            debugLog("代码表格元素为空, 退出");
+            return;
+        }
+
+        const headTr = table.querySelector('thead tr');
         if (!headTr) {
             debugLog("未找到表头行, 退出");
             return;
         };
-        if (headTr.querySelector('th.tm-left-cell')) return;
+        if (headTr.querySelector('th.tm-left-cell')) {
+            debugLog("表头行已存在复选框列, 退出");
+            return;
+        }
 
         const ref = headTr.firstElementChild;
-
         const th = document.createElement('th');
+
         th.className = `tm-left-cell`;
-    
         th.textContent = '';
 
-         if (ref) {
+        // 复制参考单元格的背景色
+        if (ref) {
             const cs = getComputedStyle(ref);
             th.style.backgroundColor = cs.backgroundColor;
         }
 
-
         headTr.insertBefore(th, headTr.firstElementChild);
-    }   
+
+        // 将 colspan += 1, 以适应新增的复选框列
+        const commitInfoRow = table.querySelector(githubAtrribute.githubCommitInfoRowCss);
+        commitInfoRow?.querySelectorAll('td').forEach(td => {
+            const colspan = td.getAttribute('colspan');
+            if (colspan) {
+                const newColspan = parseInt(colspan) + 1;
+                td.setAttribute('colspan', newColspan.toString());
+                debugLog(`更新提交信息行的 colspan 为 ${newColspan}`);
+            }
+        });
+    }
 
 
     function debugLog(msg) {
