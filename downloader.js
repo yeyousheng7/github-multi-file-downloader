@@ -22,6 +22,9 @@
 
         // 文件夹或文件行 CSS
         githubFileRowCss: ".react-directory-row",
+
+        // 上一级目录文件行 CSS
+        githubParentDirRowCss: ".Table-module__Box_3--CeioY",
         
         // 文件夹或文件行 ID 前缀
         githubFileRowIdPrefix: "folder-row-", // + number, 例如 folder-row-1
@@ -64,6 +67,14 @@
             }
         });
 
+        const parentDirRow = codeTable.querySelector(githubAtrribute.githubParentDirRowCss);
+
+        // 如果在子目录层级，禁用上一级目录的复选框
+        if(parentDirRow) {
+            addCheckboxToRow(parentDirRow, "parent-dir-row", true);
+            debugLog("在上一级目录行添加禁用的复选框");
+        }
+
         // 遍历文件行, 添加复选框
         const fileRows = codeTable.querySelectorAll(githubAtrribute.githubFileRowCss);
         debugLog(`找到 ${fileRows.length} 个文件行元素`);
@@ -77,7 +88,7 @@
         }
     }
 
-    function addCheckboxToRow(rowElement, rowId) {
+    function addCheckboxToRow(rowElement, rowId, disabled = false) {
         if (rowElement.querySelector('.tm-left-cb')) return;
 
         const td = document.createElement('td');
@@ -88,6 +99,7 @@
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.className = 'tm-left-cb';
+        cb.disabled = disabled;
 
         td.appendChild(cb);
         rowElement.insertBefore(td, rowElement.firstElementChild);
@@ -101,10 +113,19 @@
         };
         if (headTr.querySelector('th.tm-left-cell')) return;
 
+        const ref = headTr.firstElementChild;
+
         const th = document.createElement('th');
         th.className = `tm-left-cell`;
     
         th.textContent = '';
+
+         if (ref) {
+            const cs = getComputedStyle(ref);
+            th.style.backgroundColor = cs.backgroundColor;
+        }
+
+
         headTr.insertBefore(th, headTr.firstElementChild);
     }   
 
@@ -126,7 +147,6 @@
             padding: 0 !important;
             text-align: center !important;
             
-            background: inherit !important;
         }
         td.tm-left-cell {
             box-sizing: border-box !important;
