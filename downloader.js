@@ -429,25 +429,11 @@
         await Promise.all(workers);
 
         debugLog("开始打包...");
-        const zipU8 = await zipAsync(entries, 3); // level 0-9
+        const zipU8 = fflate.zipSync(entries, 3); // level 0-9
         debugLog("打包完成！");
         const blob = new Blob([zipU8], { type: "application/zip" });
         saveAs(blob, zipFilename);
         debugLog("ZIP 下载完成！");
-    }
-
-    // key 是 zip 内路径，value 是 Uint8Array
-    // const entries = {
-    //   "admin-web/package.json": Uint8Array(...),
-    //   ".gitignore": Uint8Array(...),
-    // };
-    function zipAsync(entries, level = 0) {
-        return new Promise((resolve, reject) => {
-            fflate.zip(entries, { level }, (err, data) => {
-                if (err) reject(err);
-                else resolve(data); // Uint8Array
-            });
-        });
     }
 
     function debugLog(msg) {
