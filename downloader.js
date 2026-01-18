@@ -8,6 +8,7 @@
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
 // @require      https://unpkg.com/jszip@3.10.1/dist/jszip.min.js
 // @require      https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js
+// @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @grant        GM_addStyle
 // @grant        GM_download
 // @grant        GM_xmlhttpRequest
@@ -362,7 +363,7 @@
     async function saveUrlsAsZip(urls, zipFilename) {
         // 1. 创建副本，防止修改外部传入的原数组（可选，视你需求而定）
         const queue = [...urls]; 
-        const zip = new JSZip();
+        const entries = {};
         
         // 用来记录已存在的文件名，防止冲突
         const existingNames = new Set();
@@ -390,6 +391,9 @@
                 
                 try {
                     // 解析文件名
+                    // `https://github.com/${parts.join('/')}`;
+                    // [https:, , github.com, owner, repo, raw, ref, ...path]
+
                     const segments = url.split('/');
                     let filename = segments[segments.length - 1];
                     // 处理文件名冲突
@@ -399,9 +403,9 @@
                     
                     // 下载数据
                     const buf = await gmFetchArrayBuffer(url);
-                    
-                    // 存入 ZIP
-                    zip.file(filename, new Uint8Array(buf));
+
+                    // 存入 entries
+                    entries[filename] = new Uint8Array(buf);
                     debugLog(`成功添加: ${filename}`);
                     
                 } catch (err) {
@@ -424,29 +428,26 @@
 
         await Promise.all(workers);
 
-        // 如果没有成功下载任何文件，就不生成了
-        if (Object.keys(zip.files).length === 0) {
-            alert("所有文件下载均失败，无法生成 ZIP。");
-            return;
-        }
-
         debugLog("开始打包...");
-        try {
-            const content = await zip.generateAsync({ 
-            type: "blob",
-            compression: "DEFLATE", // 默认是有压缩的
-            compressionOptions: { level: 6 } 
-        }, (metadata) => {
-            // metadata.percent 也就是进度 (0-100)
-            console.log(`打包进度: ${metadata.percent.toFixed(2)} %`);
-        });
-        } catch (error) {
-            console.error("打包失败:", error);
-        }
+        const zipU8 = await zipAsync(entries, 3); // level 0-9
         debugLog("打包完成！");
-
-        saveAs(content, zipFilename);
+        const blob = new Blob([zipU8], { type: "application/zip" });
+        saveAs(blob, zipFilename);
         debugLog("ZIP 下载完成！");
+    }
+
+    // key 是 zip 内路径，value 是 Uint8Array
+    // const entries = {
+    //   "admin-web/package.json": Uint8Array(...),
+    //   ".gitignore": Uint8Array(...),
+    // };
+    function zipAsync(entries, level = 0) {
+        return new Promise((resolve, reject) => {
+            fflate.zip(entries, { level }, (err, data) => {
+                if (err) reject(err);
+                else resolve(data); // Uint8Array
+            });
+        });
     }
 
     function debugLog(msg) {
