@@ -20,7 +20,6 @@
 
 (function() {
     'use strict';
-    // @ts-check
 
     const selectedFilePaths = new Set();
 
@@ -55,6 +54,9 @@
 
         // 调试模式
         DEBUG: true,
+
+        // 压缩等级
+        COMPRESS_LEVEL: 3,
     }
     
     debugLog("Github Downloader 脚本启动");
@@ -429,7 +431,7 @@
         await Promise.all(workers);
 
         debugLog("开始打包...");
-        const zipU8 = fflate.zipSync(entries, 3); // level 0-9
+        const zipU8 = fflate.zipSync(entries, SETTINGS.COMPRESS_LEVEL);
         debugLog("打包完成！");
         const blob = new Blob([zipU8], { type: "application/zip" });
         saveAs(blob, zipFilename);
