@@ -53,12 +53,61 @@
         // 下载并发数限制
         CONCURRENCY_LIMIT: 6,
 
-        // 调试模式
-        DEBUG: true,
-
         // 压缩等级
         COMPRESS_LEVEL: 3,
+
+        // 调试
+        LOG_LEVEL: 'debug',
+
     }
+
+    const LOG_LEVELS = {
+        debug: 10,
+        info: 20,
+        warn: 30,
+        error: 40,
+        silent: 99,
+    };
+
+    const logger = {
+        shouldLog(level) {
+            const current = LOG_LEVELS[SETTINGS.LOG_LEVEL] ?? LOG_LEVELS.info;
+            const target = LOG_LEVELS[level] ?? LOG_LEVELS.info;
+            return target >= current;
+        },
+
+        format(scope, message) {
+            const prefix = scope ? `[Github Downloader][${scope}]` : "[Github Downloader]";
+            return `${prefix} ${message}`;
+        },
+
+        write(method, level, scope, message, data) {
+            if (!this.shouldLog(level)) return;
+
+            const text = this.format(scope, message);
+            if (data !== undefined) {
+                console[method](text, data);
+            } else {
+                console[method](text);
+            }
+        },
+
+        debug(scope, message, data) {
+            this.write('debug', 'debug', scope, message, data);
+        },
+
+        info(scope, message, data) {
+            this.write('info', 'info', scope, message, data);
+        },
+
+        warn(scope, message, data) {
+            this.write('warn', 'warn', scope, message, data);
+        },
+
+        error(scope, message, data) {
+            this.write('error', 'error', scope, message, data);
+        },
+    };
 
     /**
      * @typedef {Object} SelectionEntry
@@ -91,7 +140,7 @@
 
 
 
-    debugLog("Github Downloader 脚本启动");
+    logger.info("app", "Github Downloader 脚本启动");
 
     setTimeout(() => {
         apply();
@@ -101,7 +150,7 @@
     function apply() {
         const table = document.querySelector(githubAtrribute.githubTableCss);
         if (!table) {
-            debugLog("未找到代码表格元素, 退出");
+            logger.warn("ui", "未找到代码表格元素, 退出");
             return;
         }
 
@@ -113,20 +162,20 @@
 
     function addCheckboxes(table) {
         if (!table) {
-            debugLog("代码表格元素为空, 退出");
+            logger.warn("ui", "代码表格元素为空, 退出");
             return;
         }
 
         // 遍历文件行, 添加复选框
         const fileRows = table.querySelectorAll(githubAtrribute.githubFileRowCss);
-        debugLog(`找到 ${fileRows.length} 个文件行元素`);
+        logger.debug("ui", `找到 ${fileRows.length} 个文件行元素`);
 
         for (let i = 0; i < fileRows.length; i++) {
             const row = fileRows[i];
             const rowId = githubAtrribute.githubFileRowIdPrefix + (i + 1);
 
             addCheckboxToRow(row, rowId);
-            debugLog(`在行 ${rowId} 添加复选框`);
+            logger.debug("ui", `在行 ${rowId} 添加复选框`);
         }
 
         const parentDirRow = table.querySelector(githubAtrribute.githubParentDirRowCss);
@@ -134,17 +183,17 @@
         // 如果在子目录层级，禁用上一级目录的复选框
         if (parentDirRow) {
             addCheckboxToRow(parentDirRow, "parent-dir-row", true);
-            debugLog("在上一级目录行添加禁用的复选框");
+            logger.debug("ui", "在上一级目录行添加禁用的复选框");
         }
     }
 
     function addCheckboxToRow(rowElement, rowId, disabled = false) {
         if (!rowElement) {
-            debugLog(`行元素 ${rowId} 为空, 退出`);
+            logger.warn("ui", `行元素 ${rowId} 为空, 退出`);
             return;
         }
         if (rowElement.querySelector('.tm-left-cb')) {
-            debugLog(`行元素 ${rowId} 已存在复选框, 退出`);
+            logger.debug("ui", `行元素 ${rowId} 已存在复选框, 退出`);
             return;
         }
 
@@ -164,17 +213,17 @@
 
     function ensureHeader(table) {
         if (!table) {
-            debugLog("代码表格元素为空, 退出");
+            logger.warn("ui", "代码表格元素为空, 退出");
             return;
         }
 
         const headTr = table.querySelector('thead tr');
         if (!headTr) {
-            debugLog("未找到表头行, 退出");
+            logger.warn("ui", "未找到表头行, 退出");
             return;
         };
         if (headTr.querySelector('th.tm-left-cell')) {
-            debugLog("表头行已存在复选框列, 退出");
+            logger.debug("ui", "表头行已存在复选框列, 退出");
             return;
         }
 
@@ -197,19 +246,19 @@
     // 在表格上方添加下载按钮
     function addDownloadButton(table) {
         if (!table) {
-            debugLog("未找到代码表格元素, 退出");
+            logger.warn("ui", "未找到代码表格元素, 退出");
             return;
         }
 
         const container = table.parentElement;
         if (!container) {
-            debugLog("未找到表格容器元素, 退出");
+            logger.warn("ui", "未找到表格容器元素, 退出");
             return;
         }
 
         let btn = document.querySelector('.tm-download-btn');
         if (btn) {
-            debugLog("下载按钮已存在, 退出");
+            logger.debug("ui", "下载按钮已存在, 退出");
             return;
         }
 
@@ -221,7 +270,7 @@
             startDownload();
         });
         container.insertBefore(btn, table);
-        debugLog("添加下载按钮");
+        logger.debug("ui", "添加下载按钮");
     }
 
     function fixColumnWidths(table) {
@@ -232,7 +281,7 @@
             if (colspan) {
                 const newColspan = parseInt(colspan) + 1;
                 td.setAttribute('colspan', newColspan.toString());
-                debugLog(`更新提交信息行的 colspan 为 ${newColspan}`);
+                logger.debug("ui", `更新提交信息行的 colspan 为 ${newColspan}`);
             }
         });
     }
@@ -240,7 +289,7 @@
     function observeRootChanges() {
         const root = document.getElementById(githubAtrribute.githubRootId);
         if (!root) {
-            debugLog("未找到页面根级元素, 退出");
+            logger.warn("app", "未找到页面根级元素, 退出");
             return;
         }
         if (root.dataset.tmObserved === '1') return;
@@ -262,7 +311,7 @@
 
     function bindTableEvents(table) {
         if (!table) {
-            debugLog("代码表格元素为空, 退出");
+            logger.warn("ui", "代码表格元素为空, 退出");
             return;
         }
 
@@ -281,7 +330,7 @@
                     return;
                 }
 
-                debugLog(`复选框状态改变, 文件路径: ${entry.githubPath}, 选中: ${target.checked}`);
+                logger.debug("ui", `复选框状态改变, 文件路径: ${entry.githubPath}, 选中: ${target.checked}`);
 
                 if (target.checked) {
                     selectedEntries.set(entry.githubPath, entry);
@@ -298,6 +347,8 @@
             alert("未选择任何文件！");
             return;
         }
+
+        logger.info("download", `开始下载，选中 ${entries.length} 个项目`);
 
         const plan = buildDownloadPlan(entries);
         if (plan.items.length === 0) {
@@ -323,7 +374,7 @@
 
             const rawUrl = blobToGithubRawUrl(entry.githubPath);
             if (!rawUrl) {
-                debugLog(`无法转换为 raw URL, 跳过: ${entry.githubPath}`);
+                logger.warn("plan", `无法转换为 raw URL, 跳过: ${entry.githubPath}`);
                 continue;
             }
 
@@ -334,6 +385,8 @@
                 fileName: entry.fileName,
             });
         }
+
+        logger.info("plan", `下载计划已生成，文件数: ${items.length}，模式: ${items.length === 1 ? 'single' : 'zip'}`);
 
         return {
             items,
@@ -361,6 +414,7 @@
 
 
         saveBlob(artifact.blob, artifact.downloadName);
+        logger.info("download", `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个`);
 
         if (result.failed.length > 0) {
             // TODO: 优化提示或提供重试功能
@@ -389,9 +443,9 @@
             entries[file.outputPath] = file.bytes;
         }
 
-        debugLog("开始打包");
+        logger.debug("download", "开始打包");
         const zipU8 = fflate.zipSync(entries, { level: SETTINGS.COMPRESS_LEVEL });
-        debugLog("打包完成!");
+        logger.debug("download", "打包完成!");
 
         const blob = new Blob([zipU8], { type: "application/zip" });
         return { blob, downloadName: zipFilename };
@@ -407,7 +461,7 @@
                 const item = queue.pop();
 
                 try {
-                    debugLog(`正在下载 [剩余:${queue.length}]: ${item.outputPath}`);
+                    logger.debug("download", `正在下载 [剩余:${queue.length}]: ${item.outputPath}`);
                     const buf = await gmFetchArrayBuffer(item.rawUrl);
 
                     succeeded.push({
@@ -415,13 +469,13 @@
                         bytes: new Uint8Array(buf),
                     });
 
-                    debugLog(`下载完成: ${item.outputPath}`);
+                    logger.debug("download", `下载完成: ${item.outputPath}`);
                 } catch (err) {
                     failed.push({
                         item,
                         error: err,
                     });
-                    console.error(`文件下载失败: ${item.rawUrl}`, err);
+                    logger.error("network", `文件下载失败: ${item.rawUrl}`, err);
                 }
             }
         }
@@ -540,12 +594,6 @@
 
     function saveBlob(blob, downloadName) {
         saveAs(blob, downloadName);
-    }
-
-    function debugLog(msg) {
-        if (SETTINGS.DEBUG === true) {
-            console.log(msg);
-        }
     }
 
     GM_addStyle(`
