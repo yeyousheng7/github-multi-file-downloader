@@ -18,10 +18,11 @@
 // @connect      objects.githubusercontent.com
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
-    const selectedFilePaths = new Set();
+    /** @type {Map<string, SelectionEntry>} */
+    const selectedEntries = new Map();
 
     // Github 页面元素属性
     const githubAtrribute = {
@@ -29,19 +30,19 @@
         githubRootId: "repo-content-pjax-container",
 
         // 代码表格 CSS
-        githubTableCss: ".Table-module__Box--KyMHK", 
+        githubTableCss: ".Table-module__Box__HZKiQ",
 
         // 文件夹或文件行 CSS
         githubFileRowCss: ".react-directory-row",
 
         // 上一级目录文件行 CSS
         githubParentDirRowCss: ".Table-module__Box_3--CeioY",
-        
+
         // 文件夹或文件行 ID 前缀
         githubFileRowIdPrefix: "folder-row-", // + number, 例如 folder-row-1
 
         // 文件行中第一个单元格的类名
-        githubFirstCellOnRow:  "react-directory-row-name-cell-large-screen",
+        githubFirstCellOnRow: "react-directory-row-name-cell-large-screen",
 
         // 提交信息行 CSS 
         githubCommitInfoRowCss: ".DirectoryContent-module__Box_3--zI0N1",
@@ -58,36 +59,44 @@
         // 压缩等级
         COMPRESS_LEVEL: 3,
     }
-    
+
+    /**
+     * @typedef {Object} SelectionEntry
+     * @property {'file'|'folder'} kind
+     * @property {string} githubPath
+     * @property {string} repoPath
+     * @property {string} fileName
+     */
+
+    /**
+     * @typedef {Object} DownloadItem
+     * @property {string} githubPath GitHub 页面中的站内路径，例如 /owner/repo/blob/main/src/a.js
+     * @property {string} rawUrl 文件下载地址
+     * @property {string} outputPath ZIP 内输出路径，例如 src/a.js
+     * @property {string} fileName 文件名，例如 a.js
+     */
+
+    /**
+     * @typedef {Object} DownloadArtifact
+     * @property {Blob} blob
+     * @property {string} downloadName
+     */
+
+    /**
+     * @typedef {Object} DownloadPlan
+     * @property {DownloadItem[]} items 本次要下载的文件项
+     * @property {'single'|'zip'} outputMode 输出模式：单文件或 ZIP
+     * @property {string} zipFilename ZIP 下载文件名
+     */
+
+
+
     debugLog("Github Downloader 脚本启动");
 
     setTimeout(() => {
         apply();
         observeRootChanges();
     }, 1000);
-
-    function observeRootChanges() {
-        const root = document.getElementById(githubAtrribute.githubRootId);
-        if (!root) {
-            debugLog("未找到页面根级元素, 退出");
-            return;
-        }
-        if (root.dataset.tmObserved === '1') return;
-        root.dataset.tmObserved = '1';
-
-        let t = null;
-        const schedule = () => {
-            clearTimeout(t);
-            t = setTimeout(apply, 50); // 简单防抖：DOM 连续变化时只跑一次
-        };
-
-        const obs = new MutationObserver(schedule);
-        obs.observe(root, { childList: true, subtree: true });
-
-        window.addEventListener('popstate', schedule);
-
-        schedule();
-    }
 
     function apply() {
         const table = document.querySelector(githubAtrribute.githubTableCss);
@@ -112,10 +121,10 @@
         const fileRows = table.querySelectorAll(githubAtrribute.githubFileRowCss);
         debugLog(`找到 ${fileRows.length} 个文件行元素`);
 
-        for(let i = 0; i < fileRows.length; i++) {
+        for (let i = 0; i < fileRows.length; i++) {
             const row = fileRows[i];
             const rowId = githubAtrribute.githubFileRowIdPrefix + (i + 1);
-            
+
             addCheckboxToRow(row, rowId);
             debugLog(`在行 ${rowId} 添加复选框`);
         }
@@ -123,14 +132,14 @@
         const parentDirRow = table.querySelector(githubAtrribute.githubParentDirRowCss);
 
         // 如果在子目录层级，禁用上一级目录的复选框
-        if(parentDirRow) {
+        if (parentDirRow) {
             addCheckboxToRow(parentDirRow, "parent-dir-row", true);
             debugLog("在上一级目录行添加禁用的复选框");
         }
     }
 
     function addCheckboxToRow(rowElement, rowId, disabled = false) {
-        if(!rowElement) {
+        if (!rowElement) {
             debugLog(`行元素 ${rowId} 为空, 退出`);
             return;
         }
@@ -154,7 +163,7 @@
     }
 
     function ensureHeader(table) {
-        if(!table) {
+        if (!table) {
             debugLog("代码表格元素为空, 退出");
             return;
         }
@@ -209,8 +218,7 @@
         btn.textContent = '下载所选文件';
         btn.style.marginBottom = '8px';
         btn.addEventListener('click', () => {
-            debugLog("下载按钮被点击");
-            downloadSelectedFiles();
+            startDownload();
         });
         container.insertBefore(btn, table);
         debugLog("添加下载按钮");
@@ -229,30 +237,251 @@
         });
     }
 
+    function observeRootChanges() {
+        const root = document.getElementById(githubAtrribute.githubRootId);
+        if (!root) {
+            debugLog("未找到页面根级元素, 退出");
+            return;
+        }
+        if (root.dataset.tmObserved === '1') return;
+        root.dataset.tmObserved = '1';
+
+        let t = null;
+        const schedule = () => {
+            clearTimeout(t);
+            t = setTimeout(apply, 50); // 简单防抖：DOM 连续变化时只跑一次
+        };
+
+        const obs = new MutationObserver(schedule);
+        obs.observe(root, { childList: true, subtree: true });
+
+        window.addEventListener('popstate', schedule);
+
+        schedule();
+    }
+
     function bindTableEvents(table) {
-        if(!table) {
+        if (!table) {
             debugLog("代码表格元素为空, 退出");
             return;
         }
+
+        if (table.dataset.tmBound === '1') {
+            return;
+        }
+        table.dataset.tmBound = '1';
+
         table.addEventListener('change', (event) => {
             const target = event.target;
             if (target && target.classList.contains('tm-left-cb')) {
                 const rowElement = target.closest(githubAtrribute.githubFileRowCss);
-                const filePath = getFilePath(rowElement);
-                debugLog(`复选框状态改变, 文件路径: ${filePath}, 选中: ${target.checked}`);
+                const entry = parseSelectionFromRow(rowElement)
+
+                if (!entry) {
+                    return;
+                }
+
+                debugLog(`复选框状态改变, 文件路径: ${entry.githubPath}, 选中: ${target.checked}`);
 
                 if (target.checked) {
-                    selectedFilePaths.add(filePath);
+                    selectedEntries.set(entry.githubPath, entry);
                 } else {
-                    selectedFilePaths.delete(filePath);
+                    selectedEntries.delete(entry.githubPath);
                 }
             }
-            debugLog(selectedFilePaths);
         });
     }
 
+    async function startDownload() {
+        const entries = getSelectionEntries();
+        if (entries.length === 0) {
+            alert("未选择任何文件！");
+            return;
+        }
+
+        const plan = buildDownloadPlan(entries);
+        if (plan.items.length === 0) {
+            alert("没有有效的文件可下载！");
+            return;
+        }
+        await executeDownloadPlan(plan);
+    }
+
+    /**
+     * 根据选中项构建下载计划
+     *
+     * @param {SelectionEntry[]} entries
+     * @returns {DownloadPlan}
+     */
+    function buildDownloadPlan(entries) {
+        const items = [];
+
+        for (const entry of entries) {
+            if (entry.kind === 'folder') {
+                throw new Error(`暂不支持下载文件夹: ${entry.githubPath}`);
+            }
+
+            const rawUrl = blobToGithubRawUrl(entry.githubPath);
+            if (!rawUrl) {
+                debugLog(`无法转换为 raw URL, 跳过: ${entry.githubPath}`);
+                continue;
+            }
+
+            items.push({
+                githubPath: entry.githubPath,
+                rawUrl,
+                outputPath: entry.repoPath,
+                fileName: entry.fileName,
+            });
+        }
+
+        return {
+            items,
+            outputMode: items.length === 1 ? 'single' : 'zip',
+            zipFilename: `github_files_${Date.now()}.zip`,
+        }
+    }
+
+    async function executeDownloadPlan(plan) {
+        const result = await fetchDownloadItems(plan.items);
+
+        if (result.succeeded.length === 0) {
+            alert("下载失败，没有成功获取任何文件");
+            return;
+        }
+        let artifact;
+        if (plan.outputMode === 'single') {
+            artifact = buildSingleFileArtifact(result.succeeded[0]);
+        } else if (plan.outputMode === 'zip') {
+            artifact = buildZipArtifact(result.succeeded, plan.zipFilename);
+        } else {
+            alert(`未知的输出模式: ${plan.outputMode}`);
+            return;
+        }
+
+
+        saveBlob(artifact.blob, artifact.downloadName);
+
+        if (result.failed.length > 0) {
+            // TODO: 优化提示或提供重试功能
+            alert(`部分文件下载失败: \n${result.failed.map(f => f.item.githubPath).join('\n')}`);
+        }
+    }
+
+    /**
+     * @param {DownloadItem & { bytes: Uint8Array }} file
+     * @returns {DownloadArtifact}
+     */
+    function buildSingleFileArtifact(file) {
+        const blob = new Blob([file.bytes], { type: "application/octet-stream" });
+        return { blob, downloadName: file.fileName };
+    }
+
+    /**
+     * @param {Array<DownloadItem & { bytes: Uint8Array }>} files
+     * @param {string} zipFilename
+     * @returns {DownloadArtifact}
+     */
+    function buildZipArtifact(files, zipFilename) {
+        const entries = {};
+
+        for (const file of files) {
+            entries[file.outputPath] = file.bytes;
+        }
+
+        debugLog("开始打包");
+        const zipU8 = fflate.zipSync(entries, { level: SETTINGS.COMPRESS_LEVEL });
+        debugLog("打包完成!");
+
+        const blob = new Blob([zipU8], { type: "application/zip" });
+        return { blob, downloadName: zipFilename };
+    }
+
+    async function fetchDownloadItems(items) {
+        const queue = [...items];
+        const succeeded = [];
+        const failed = [];
+
+        async function worker() {
+            while (queue.length > 0) {
+                const item = queue.pop();
+
+                try {
+                    debugLog(`正在下载 [剩余:${queue.length}]: ${item.outputPath}`);
+                    const buf = await gmFetchArrayBuffer(item.rawUrl);
+
+                    succeeded.push({
+                        ...item,
+                        bytes: new Uint8Array(buf),
+                    });
+
+                    debugLog(`下载完成: ${item.outputPath}`);
+                } catch (err) {
+                    failed.push({
+                        item,
+                        error: err,
+                    });
+                    console.error(`文件下载失败: ${item.rawUrl}`, err);
+                }
+            }
+        }
+
+        const workers = [];
+        const limit = SETTINGS.CONCURRENCY_LIMIT || 3;
+
+        for (let i = 0; i < limit; i++) {
+            workers.push(worker());
+        }
+
+        await Promise.all(workers);
+
+        return { succeeded, failed };
+    }
+
+    /**
+     * 从表格行中解析选中项
+     */
+    function parseSelectionFromRow(rowElement) {
+        const path = getFilePath(rowElement);
+        if (!path) return null;
+
+        const parts = path.split('/');
+        // [ "", owner, repo, "blob"|"tree", ref, ...path ]
+        if (parts.length < 6) return null;
+
+        const kind = parts[3] === 'blob' ? 'file' : (parts[3] === 'tree' ? 'folder' : null);
+        if (!kind) return null;
+
+        const repoPath = parts.slice(5).join('/');
+        const fileName = repoPath.split('/').pop();
+
+        return {
+            kind,
+            githubPath: path,
+            repoPath,
+            fileName,
+        }
+    }
+
+    /**
+     * 获取 GitHub 仓库列表中某一行对应条目的站内路径。
+     * 
+     * 该结果依赖当前 GitHub 页面 DOM 结构实现，
+     * 后续若 GitHub 修改页面结构，此函数可能失效。
+     * 
+     * 当前:
+     *  - 如果是文件, 返回 "/owner/repo/blob/ref/path/to/file"
+     *  - 如果是文件夹, 返回 "/owner/repo/tree/ref/path/to/folder"
+     * 
+     * 返回值示例：
+     * - 文件："/owner/repo/blob/ref/path/to/file"
+     * - 文件夹："/owner/repo/tree/ref/path/to/folder"
+     * 
+     * @param {HTMLElement} rowElement 
+     * @returns {string|null}
+     */
     function getFilePath(rowElement) {
-        if(!rowElement) {
+        if (!rowElement) {
             return null;
         }
         // 从 <a> 标签获取文件路径
@@ -267,179 +496,54 @@
         return href;
     }
 
-    function convertPathToRawUrl(filePath) {
-        return null;   
+    function getSelectionEntries() {
+        return Array.from(selectedEntries.values());
     }
 
+    /**
+     * 将 GitHub blob path 转换为 raw URL，在无法转化时，返回 null。
+     * 
+     * 例如:
+     * - 输入: "/owner/repo/blob/ref/path/to/file"
+     * - 输出: "https://github.com/owner/repo/raw/ref/path/to/file"
+     * 
+     * @param {string} filePath 
+     * @returns {string|null}
+     */
     function blobToGithubRawUrl(filePath) {
         const u = new URL(filePath, location.origin);
         const parts = u.pathname.split('/');
         // ["", owner, repo, "blob", ref, ...path]
-        if(parts.length < 6 || parts[3] !== 'blob') {
-            debugLog(`无法转换为 raw URL: ${parts}`);
+        if (parts.length < 6 || parts[3] !== 'blob') {
             return null;
         }
         parts[3] = 'raw';
         return `https://github.com/${parts.join('/')}`;
     }
 
-    function downloadSelectedFiles() {
-        if (selectedFilePaths.size === 0) {
-            alert("未选择任何文件！");
-            return;
-        }
-
-        if (selectedFilePaths.size === 1) {
-            // 仅一个文件，直接下载
-            const filePath = selectedFilePaths.values().next().value;
-            const rawUrl = blobToGithubRawUrl(filePath);
-            if (!rawUrl) {
-                alert(`无法转换为下载链接: ${filePath}`);
-                return;
-            }
-            const segments = filePath.split('/');
-            const filename = segments[segments.length - 1];
-            debugLog(`开始下载单个文件: ${filename} (${rawUrl})`);
-            saveUrlAsFile(rawUrl, filename);
-        } else {
-            // 多个文件，打包为 ZIP 下载
-            const urls = [];
-            selectedFilePaths.forEach(filePath => {
-                const rawUrl = blobToGithubRawUrl(filePath);
-                if (rawUrl) {
-                    urls.push(rawUrl);
-                }
-            });
-            if (urls.length === 0) {
-                alert("没有有效的文件可下载！");
-                return;
-            }
-
-            if (urls.length < selectedFilePaths.size) {
-                let ok = confirm(`部分文件无法转换为下载链接，是否继续下载剩余 ${urls.length} 个文件？`);
-                if (!ok) {
-                    debugLog("用户取消下载");
-                    return;
-                }
-            }
-
-            debugLog(`开始下载多个文件: ${urls.length} 个`);
-            const zipFilename = `github_files_${Date.now()}.zip`;
-            saveUrlsAsZip(urls, zipFilename);
-        }
-    }
-
-   function gmFetchArrayBuffer(url) {
+    function gmFetchArrayBuffer(url) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
-            method: "GET",
-            url,
-            responseType: "arraybuffer",
-            anonymous: false,
-            withCredentials: true, // 让 github.com 登录态生效
-            onload: (res) => {
-                if (res.status >= 200 && res.status < 300) resolve(res.response);
-                else reject(new Error(`HTTP ${res.status}`));
-            },
-            onerror: () => reject(new Error("Network error")),
+                method: "GET",
+                url,
+                responseType: "arraybuffer",
+                anonymous: false,
+                withCredentials: true, // 让 github.com 登录态生效
+                onload: (res) => {
+                    if (res.status >= 200 && res.status < 300) resolve(res.response);
+                    else reject(new Error(`HTTP ${res.status}`));
+                },
+                onerror: () => reject(new Error("Network error")),
             });
         });
     }
 
-
-    // 将指定 URL 的内容保存为文件
-    async function saveUrlAsFile(url, filename) {
-        const buf = await gmFetchArrayBuffer(url);
-        const blob = new Blob([buf], { type: "application/octet-stream" });
-
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = filename; // 这里可以是 ".gitignore"
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-
-        setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
-    }
-
-    async function saveUrlsAsZip(urls, zipFilename) {
-        // 1. 创建副本，防止修改外部传入的原数组（可选，视你需求而定）
-        const queue = [...urls]; 
-        const entries = {};
-        
-        // 用来记录已存在的文件名，防止冲突
-        const existingNames = new Set();
-
-        // 处理文件名的辅助函数：如果重名则添加 (1), (2)...
-        function getUniqueFilename(originalName) {
-            let name = originalName;
-            let counter = 1;
-            while (existingNames.has(name)) {
-                const dotIndex = originalName.lastIndexOf('.');
-                if (dotIndex !== -1) {
-                    name = `${originalName.substring(0, dotIndex)}(${counter})${originalName.substring(dotIndex)}`;
-                } else {
-                    name = `${originalName}(${counter})`;
-                }
-                counter++;
-            }
-            existingNames.add(name);
-            return name;
-        }
-
-        async function worker() {
-            while (queue.length > 0) {
-                const url = queue.pop(); // 取出任务
-                
-                try {
-                    // 解析文件名
-                    // `https://github.com/${parts.join('/')}`;
-                    // [https:, , github.com, owner, repo, raw, ref, ...path]
-
-                    const segments = url.split('/');
-                    let filename = segments[segments.length - 1];
-                    // 处理文件名冲突
-                    filename = getUniqueFilename(filename);
-
-                    debugLog(`正在下载 [剩余:${queue.length}]: ${filename}`);
-                    
-                    // 下载数据
-                    const buf = await gmFetchArrayBuffer(url);
-
-                    // 存入 entries
-                    entries[filename] = new Uint8Array(buf);
-                    debugLog(`成功添加: ${filename}`);
-                    
-                } catch (err) {
-                    // 关键：捕获错误，不要让单个失败中断整个流程
-                    console.error(`文件下载失败: ${url}`, err);
-                    // 可以在 zip 里放一个错误日志文件，提示用户哪个文件丢了
-                    zip.file(`ERROR_${Date.now()}.txt`, `下载失败的文件: ${url}\n原因: ${err.message}`);
-                }
-            }
-        }
-
-        // 创建并发任务
-        const workers = [];
-        // 限制并发数，防止浏览器卡死或触发 GitHub 速率限制
-        const limit = SETTINGS.CONCURRENCY_LIMIT || 3; 
-        
-        for (let i = 0; i < limit; i++) {
-            workers.push(worker());
-        }
-
-        await Promise.all(workers);
-
-        debugLog("开始打包...");
-        const zipU8 = fflate.zipSync(entries, SETTINGS.COMPRESS_LEVEL);
-        debugLog("打包完成！");
-        const blob = new Blob([zipU8], { type: "application/zip" });
-        saveAs(blob, zipFilename);
-        debugLog("ZIP 下载完成！");
+    function saveBlob(blob, downloadName) {
+        saveAs(blob, downloadName);
     }
 
     function debugLog(msg) {
-        if(SETTINGS.DEBUG === true) {
+        if (SETTINGS.DEBUG === true) {
             console.log(msg);
         }
     }
@@ -476,4 +580,4 @@
         `
     );
 
-})();
+}());
