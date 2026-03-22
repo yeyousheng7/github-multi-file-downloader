@@ -74,7 +74,7 @@
         COMPRESS_LEVEL: 3,
 
         // 调试
-        LOG_LEVEL: 'debug',
+        LOG_LEVEL: 'info',
 
     };
 
@@ -153,6 +153,7 @@
      * @property {DownloadItem[]} items 本次要下载的文件项
      * @property {'single'|'zip'} outputMode 输出模式：单文件或 ZIP
      * @property {string} zipFilename ZIP 下载文件名
+     * @property {string[]} skippedFolders 跳过的文件夹列表
      */
 
 
@@ -372,9 +373,23 @@
 
         const plan = buildDownloadPlan(entries);
         if (plan.items.length === 0) {
-            alert("没有有效的文件可下载！");
+            alert("没有有效的文件可下载！(暂不支持文件夹下载)");
             return;
         }
+
+        if (plan.skippedFolders.length > 0) {
+            let skippedListTop5Msg =
+                plan.skippedFolders
+                    .slice(0, 5)
+                    .map((folderPath) => decodeGitHubRepoPath(folderPath.split('/')))
+                    .join('\n');
+            if (plan.skippedFolders.length > 5) skippedListTop5Msg += '\n...';
+            let ok = confirm(`有 ${plan.skippedFolders.length} 个文件夹被跳过，是否继续下载？\n${skippedListTop5Msg}`);
+            if (!ok) {
+                return;
+            }
+        }
+
         await executeDownloadPlan(plan);
     }
 
@@ -386,10 +401,13 @@
      */
     function buildDownloadPlan(entries) {
         const items = [];
+        const skippedFolders = [];
 
         for (const entry of entries) {
             if (entry.kind === 'folder') {
-                throw new Error(`暂不支持下载文件夹: ${entry.githubPath}`);
+                skippedFolders.push(entry.githubPath);
+                logger.warn("plan", `跳过文件夹: ${entry.githubPath}`);
+                continue;
             }
 
             const rawUrl = blobToGithubRawUrl(entry.githubPath);
@@ -412,6 +430,7 @@
             items,
             outputMode: items.length === 1 ? 'single' : 'zip',
             zipFilename: `github_files_${Date.now()}.zip`,
+            skippedFolders,
         }
     }
 
