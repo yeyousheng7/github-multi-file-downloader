@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Github Downloader
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.1.0
 // @description  在 Github 仓库页面添加多文件下载按钮, 方便下载。
 // @author       yys
 // @match        https://github.com/*
@@ -23,6 +23,8 @@
 
     /** @type {Map<string, SelectionEntry>} */
     const selectedEntries = new Map();
+
+    let currentPageKey = null; // 当前页面唯一标识, 用于检测页面变化
 
     // Github 页面元素属性
     const githubAtrribute = {
@@ -166,6 +168,12 @@
     }, 1000);
 
     function apply() {
+        const pageKey = getPageKey();
+        if (pageKey !== currentPageKey) {
+            resetSelectionState();
+            currentPageKey = pageKey;
+        }
+
         const table = findRepositoryFileTable();
         if (!table) {
             logger.warn("ui", "未找到代码表格元素, 退出");
@@ -838,8 +846,16 @@
         btn.textContent = text;
     }
 
+    function resetSelectionState() {
+        selectedEntries.clear();
+    }
+
     function resetDownloadButtonState() {
         setDownloadButtonState({ disabled: false, text: '下载所选文件' });
+    }
+
+    function getPageKey() {
+        return location.pathname + location.search;
     }
 
     function getDownloadButton() {
