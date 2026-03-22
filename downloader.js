@@ -55,9 +55,9 @@
         specialFileRowCandidate: [
             'tr[data-testid="view-all-files-row"]',
         ],
-        // “上一级目录”行的旧 class 。
-        parentDirRowFallbackCandidate: [
-            '.Table-module__Box_3--CeioY',
+        // “上一级目录”链接。
+        parentDirLinkCandidate: [
+            'a[aria-label="Parent directory"]',
         ],
         // 提交信息行的旧 class 。
         commitInfoRowCandidate: [
@@ -169,7 +169,6 @@
             logger.warn("ui", "未找到代码表格元素, 退出");
             return;
         }
-
         ensureHeader(table);
         addCheckboxes(table);
         addDownloadButton(table);
@@ -182,6 +181,17 @@
             return;
         }
 
+        // 下面需要先处理上一级目录行，再处理其余文件行
+        // 先后顺序不可调换，否则按钮禁用状态将无法正确设置
+        // 当前逻辑依赖于 addCheckboxToRow 中的防抖判断，以跳过上一级目录行的重复添加
+
+        // 如果在子目录层级，禁用上一级目录的复选框
+        const parentDirRow = findParentDirectoryRow(table);
+        if (parentDirRow) {
+            addCheckboxToRow(parentDirRow, "parent-dir-row", true);
+            logger.debug("ui", "在上一级目录行添加禁用的复选框");
+        }
+
         // 遍历文件行, 添加复选框
         const fileRows = getEntryRows(table);
         logger.debug("ui", `找到 ${fileRows.length} 个文件行元素`);
@@ -192,14 +202,6 @@
 
             addCheckboxToRow(row, rowId);
             logger.debug("ui", `在行 ${rowId} 添加复选框`);
-        }
-
-        const parentDirRow = findParentDirectoryRow(table);
-        logger.debug("ui", parentDirRow ? "找到上一级目录行元素" : "未找到上一级目录行元素");
-        // 如果在子目录层级，禁用上一级目录的复选框
-        if (parentDirRow) {
-            addCheckboxToRow(parentDirRow, "parent-dir-row", true);
-            logger.debug("ui", "在上一级目录行添加禁用的复选框");
         }
     }
 
@@ -671,38 +673,6 @@
     }
 
     /**
-     * 获取当前页面对应的父目录 GitHub path。
-     *
-     * 例如:
-     * - 当前: /owner/repo/tree/main/src/utils
-     * - 返回: /owner/repo/tree/main/src
-     *
-     * 若当前位于仓库根目录，则返回 null。
-     *
-     * @returns {string|null}
-     */
-    function getParentDirectoryPath() {
-        const parts = location.pathname.split('/');
-        // ["", owner, repo, "tree", ref, ...path]
-        if (parts.length < 6 || parts[3] !== 'tree') {
-            return null;
-        }
-
-        const currentPathParts = parts.slice(5);
-        if (currentPathParts.length === 0) {
-            return null;
-        }
-
-        const parentPathParts = currentPathParts.slice(0, -1);
-        const parentParts = parts.slice(0, 5);
-        if (parentPathParts.length > 0) {
-            parentParts.push(...parentPathParts);
-        }
-
-        return parentParts.join('/');
-    }
-
-    /**
      * 在文件表格中定位“上一级目录”对应的行。
      *
      * @param {HTMLElement} table
@@ -712,25 +682,18 @@
         if (!table) {
             return null;
         }
-        // 优先根据当前页面路径推导父目录链接，失败时回退使用 class 。
-        const parentPath = getParentDirectoryPath();
-        if (parentPath) {
-            const links = table.querySelectorAll('a[href]');
-            for (const link of links) {
-                const href = link.getAttribute('href');
-                if (href !== parentPath) {
-                    continue;
-                }
 
-                const row = link.closest('tr');
-                if (row && !isSpecialFileRow(row) && !getEntryLink(row)) {
-                    return row;
-                }
-            }
+        const parentDirLink = queryFirst(githubSelectors.parentDirLinkCandidate, table);
+        if (!parentDirLink) {
+            return null;
         }
 
-        const fallbackRow = queryFirst(githubSelectors.parentDirRowFallbackCandidate, table);
-        return fallbackRow instanceof HTMLTableRowElement ? fallbackRow : null;
+        const row = parentDirLink.closest('tr');
+        if (!row || isSpecialFileRow(row)) {
+            return null;
+        }
+
+        return row;
     }
 
 
