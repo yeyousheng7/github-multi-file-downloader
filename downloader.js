@@ -34,34 +34,35 @@
     };
 
     const githubSelectors = {
-        // 文件表格本体。
+        // 文件表格本体
         // 主策略依赖“table 内含文件/目录条目链接”来判定是否命中，
         // 因此这里可以接受较宽的候选；
-        // 后面的 module class 仅作为备选，Github 可能随时调整样式导致其失效。 
+        // 后面的 module class 仅作为备选，Github 可能随时调整样式导致其失效
         tableCandidate: [
             'table',
             '.Table-module__Box__HZKiQ',
         ],
-        // 文件/目录主链接。
+        // 文件/目录主链接
         // 优先使用 aria-label 中带 "(File)/(Directory)" 的语义化链接，
-        // 再退回到 href 中的 /blob/ /tree/ 特征。
+        // 再退回到 href 中的 /blob/ /tree/ 特征
         entryLinkCandidate: [
             'a[aria-label$=", (File)"]',
             'a[aria-label$=", (Directory)"]',
             'a[href*="/blob/"]',
             'a[href*="/tree/"]',
         ],
-        // 文件列表中的功能行，例如 "View all files"。
+        // 文件列表中的功能行，例如 "View all files"
         specialFileRowCandidate: [
             'tr[data-testid="view-all-files-row"]',
         ],
-        // “上一级目录”链接。
+        // “上一级目录”链接
         parentDirLinkCandidate: [
             'a[aria-label="Parent directory"]',
         ],
-        // 提交信息行的旧 class 。
-        commitInfoRowCandidate: [
-            '.DirectoryContent-module__Box_3--zI0N1',
+        // 首页 latest commit 区块内部的稳定锚点
+        latestCommitAnchorCandidate: [
+            '[data-testid="latest-commit"]',
+            '[data-testid="latest-commit-details"]',
         ],
     };
 
@@ -292,14 +293,14 @@
     }
 
     function fixColumnWidths(table) {
-        // 将 colspan += 1, 以适应新增的复选框列
-        const commitInfoRow = queryFirst(githubSelectors.commitInfoRowCandidate, table);
-        commitInfoRow?.querySelectorAll('td').forEach(td => {
+        // 首页的 latest commit 行需要补上新增的复选框列宽度。
+        const latestCommitRow = findLatestCommitRow(table);
+        latestCommitRow?.querySelectorAll('td[colspan]').forEach(td => {
             const colspan = td.getAttribute('colspan');
             if (colspan) {
                 const newColspan = parseInt(colspan) + 1;
                 td.setAttribute('colspan', newColspan.toString());
-                logger.debug("ui", `更新提交信息行的 colspan 为 ${newColspan}`);
+                logger.debug("ui", `更新 latest commit 行的 colspan 为 ${newColspan}`);
             }
         });
     }
@@ -694,6 +695,28 @@
         }
 
         return row;
+    }
+
+    /**
+     * 在首页文件表格中定位 latest commit 行。
+     *
+     * 无法定位时返回 null。该行需要特殊处理以适配新增的复选框列。
+     *
+     * @param {HTMLElement} table
+     * @returns {HTMLTableRowElement|null}
+     */
+    function findLatestCommitRow(table) {
+        if (!table) {
+            return null;
+        }
+
+        const latestCommitAnchor = queryFirst(githubSelectors.latestCommitAnchorCandidate, table);
+        if (!latestCommitAnchor) {
+            return null;
+        }
+
+        const row = latestCommitAnchor.closest('tr');
+        return row instanceof HTMLTableRowElement ? row : null;
     }
 
 
