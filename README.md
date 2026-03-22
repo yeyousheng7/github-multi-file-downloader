@@ -18,3 +18,7 @@
 1. 在 Tampermonkey 中安装脚本
 2. 打开 GitHub 仓库文件页
 3. 勾选需要下载的文件并点击“下载所选文件”
+
+效果：
+
+![example](assets/image/README/example.png)
