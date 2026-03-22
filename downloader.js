@@ -552,7 +552,7 @@
             return null;
         }
 
-        const repoPath = parts.slice(5).join('/');
+        const repoPath = decodeGitHubRepoPath(parts.slice(5));
         const fileName = repoPath.split('/').pop() || '';
 
         return {
@@ -561,6 +561,24 @@
             repoPath,
             fileName,
         };
+    }
+
+    /**
+     * 将 GitHub URL path 中的仓库相对路径段解码为可读名称。
+     *
+     * 若某个路径段不是合法的 URI 编码，则保留原值。
+     *
+     * @param {string[]} pathSegments
+     * @returns {string}
+     */
+    function decodeGitHubRepoPath(pathSegments) {
+        return pathSegments.map(segment => {
+            try {
+                return decodeURIComponent(segment);
+            } catch {
+                return segment;
+            }
+        }).join('/');
     }
 
 
