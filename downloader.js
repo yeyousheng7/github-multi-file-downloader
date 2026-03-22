@@ -29,24 +29,40 @@
         // 页面根级元素 ID
         githubRootId: "repo-content-pjax-container",
 
-        // 代码表格 CSS
-        githubTableCss: ".Table-module__Box__HZKiQ",
-
-        // 文件夹或文件行 CSS
-        githubFileRowCss: ".react-directory-row",
-
-        // 上一级目录文件行 CSS
-        githubParentDirRowCss: ".Table-module__Box_3--CeioY",
-
         // 文件夹或文件行 ID 前缀
         githubFileRowIdPrefix: "folder-row-", // + number, 例如 folder-row-1
+    };
 
-        // 文件行中第一个单元格的类名
-        githubFirstCellOnRow: "react-directory-row-name-cell-large-screen",
-
-        // 提交信息行 CSS 
-        githubCommitInfoRowCss: ".DirectoryContent-module__Box_3--zI0N1",
-
+    const githubSelectors = {
+        // 文件表格本体。
+        // 主策略依赖“table 内含文件/目录条目链接”来判定是否命中，
+        // 因此这里可以接受较宽的候选；
+        // 后面的 module class 仅作为备选，Github 可能随时调整样式导致其失效。 
+        tableCandidate: [
+            'table',
+            '.Table-module__Box__HZKiQ',
+        ],
+        // 文件/目录主链接。
+        // 优先使用 aria-label 中带 "(File)/(Directory)" 的语义化链接，
+        // 再退回到 href 中的 /blob/ /tree/ 特征。
+        entryLinkCandidate: [
+            'a[aria-label$=", (File)"]',
+            'a[aria-label$=", (Directory)"]',
+            'a[href*="/blob/"]',
+            'a[href*="/tree/"]',
+        ],
+        // 文件列表中的功能行，例如 "View all files"。
+        specialFileRowCandidate: [
+            'tr[data-testid="view-all-files-row"]',
+        ],
+        // “上一级目录”行的旧 class 。
+        parentDirRowFallbackCandidate: [
+            '.Table-module__Box_3--CeioY',
+        ],
+        // 提交信息行的旧 class 。
+        commitInfoRowCandidate: [
+            '.DirectoryContent-module__Box_3--zI0N1',
+        ],
     };
 
     const SETTINGS = {
@@ -59,7 +75,7 @@
         // 调试
         LOG_LEVEL: 'debug',
 
-    }
+    };
 
     const LOG_LEVELS = {
         debug: 10,
@@ -148,7 +164,7 @@
     }, 1000);
 
     function apply() {
-        const table = document.querySelector(githubAtrribute.githubTableCss);
+        const table = findRepositoryFileTable();
         if (!table) {
             logger.warn("ui", "未找到代码表格元素, 退出");
             return;
@@ -167,7 +183,7 @@
         }
 
         // 遍历文件行, 添加复选框
-        const fileRows = table.querySelectorAll(githubAtrribute.githubFileRowCss);
+        const fileRows = getEntryRows(table);
         logger.debug("ui", `找到 ${fileRows.length} 个文件行元素`);
 
         for (let i = 0; i < fileRows.length; i++) {
@@ -178,8 +194,8 @@
             logger.debug("ui", `在行 ${rowId} 添加复选框`);
         }
 
-        const parentDirRow = table.querySelector(githubAtrribute.githubParentDirRowCss);
-
+        const parentDirRow = findParentDirectoryRow(table);
+        logger.debug("ui", parentDirRow ? "找到上一级目录行元素" : "未找到上一级目录行元素");
         // 如果在子目录层级，禁用上一级目录的复选框
         if (parentDirRow) {
             addCheckboxToRow(parentDirRow, "parent-dir-row", true);
@@ -275,7 +291,7 @@
 
     function fixColumnWidths(table) {
         // 将 colspan += 1, 以适应新增的复选框列
-        const commitInfoRow = table.querySelector(githubAtrribute.githubCommitInfoRowCss);
+        const commitInfoRow = queryFirst(githubSelectors.commitInfoRowCandidate, table);
         commitInfoRow?.querySelectorAll('td').forEach(td => {
             const colspan = td.getAttribute('colspan');
             if (colspan) {
@@ -322,21 +338,22 @@
 
         table.addEventListener('change', (event) => {
             const target = event.target;
-            if (target && target.classList.contains('tm-left-cb')) {
-                const rowElement = target.closest(githubAtrribute.githubFileRowCss);
-                const entry = parseSelectionFromRow(rowElement)
+            if (!(target instanceof HTMLInputElement) || !target.classList.contains('tm-left-cb')) {
+                return;
+            }
 
-                if (!entry) {
-                    return;
-                }
+            const rowElement = target.closest('tr');
+            const entry = parseSelectionFromRow(rowElement);
+            if (!entry) {
+                return;
+            }
 
-                logger.debug("ui", `复选框状态改变, 文件路径: ${entry.githubPath}, 选中: ${target.checked}`);
+            logger.debug("ui", `复选框状态改变, 文件路径: ${entry.githubPath}, 选中: ${target.checked}`);
 
-                if (target.checked) {
-                    selectedEntries.set(entry.githubPath, entry);
-                } else {
-                    selectedEntries.delete(entry.githubPath);
-                }
+            if (target.checked) {
+                selectedEntries.set(entry.githubPath, entry);
+            } else {
+                selectedEntries.delete(entry.githubPath);
             }
         });
     }
@@ -494,61 +511,228 @@
 
     /**
      * 从表格行中解析选中项
+     *
+     * @param {HTMLElement} rowElement
+     * @returns {SelectionEntry|null}
      */
     function parseSelectionFromRow(rowElement) {
-        const path = getFilePath(rowElement);
-        if (!path) return null;
+        const entryLink = getEntryLink(rowElement);
+        if (!entryLink) {
+            return null;
+        }
+
+        const path = entryLink.getAttribute('href');
+        if (!path) {
+            return null;
+        }
 
         const parts = path.split('/');
-        // [ "", owner, repo, "blob"|"tree", ref, ...path ]
-        if (parts.length < 6) return null;
+        // ["", owner, repo, "blob"|"tree", ref, ...path]
+        if (parts.length < 6) {
+            return null;
+        }
 
-        const kind = parts[3] === 'blob' ? 'file' : (parts[3] === 'tree' ? 'folder' : null);
-        if (!kind) return null;
+        const ariaLabel = entryLink.getAttribute('aria-label') || '';
+
+        let kind = null;
+        if (ariaLabel.endsWith(', (File)')) {
+            kind = 'file';
+        } else if (ariaLabel.endsWith(', (Directory)')) {
+            kind = 'folder';
+        } else if (parts[3] === 'blob') {
+            kind = 'file';
+        } else if (parts[3] === 'tree') {
+            kind = 'folder';
+        }
+
+        if (!kind) {
+            return null;
+        }
 
         const repoPath = parts.slice(5).join('/');
-        const fileName = repoPath.split('/').pop();
+        const fileName = repoPath.split('/').pop() || '';
 
         return {
             kind,
             githubPath: path,
             repoPath,
             fileName,
-        }
+        };
     }
+
 
     /**
      * 获取 GitHub 仓库列表中某一行对应条目的站内路径。
-     * 
-     * 该结果依赖当前 GitHub 页面 DOM 结构实现，
-     * 后续若 GitHub 修改页面结构，此函数可能失效。
-     * 
+     *
      * 当前:
-     *  - 如果是文件, 返回 "/owner/repo/blob/ref/path/to/file"
-     *  - 如果是文件夹, 返回 "/owner/repo/tree/ref/path/to/folder"
-     * 
-     * 返回值示例：
-     * - 文件："/owner/repo/blob/ref/path/to/file"
-     * - 文件夹："/owner/repo/tree/ref/path/to/folder"
-     * 
-     * @param {HTMLElement} rowElement 
+     * - 文件: "/owner/repo/blob/ref/path/to/file"
+     * - 文件夹: "/owner/repo/tree/ref/path/to/folder"
+     *
+     * @param {HTMLElement} rowElement
      * @returns {string|null}
      */
     function getFilePath(rowElement) {
+        const entryLink = getEntryLink(rowElement);
+        if (!entryLink) {
+            return null;
+        }
+
+        return entryLink.getAttribute('href');
+    }
+
+
+    /**
+     * 获取目录行中代表文件或文件夹的主链接。
+     *
+     * 优先使用 aria-label 中带有 "(File)" 或 "(Directory)" 的链接，
+     * 失败时再退回到 href 中包含 /blob/ 或 /tree/ 的链接。
+     *
+     * @param {HTMLElement} rowElement
+     * @returns {HTMLAnchorElement|null}
+     */
+    function getEntryLink(rowElement) {
         if (!rowElement) {
             return null;
         }
-        // 从 <a> 标签获取文件路径
-        // github 存在多个 <a> 标签, 内容都是相同的
-        // 因此此处简单实现, 只获取第一个
-        // 如果 github 修改了 DOM 结构, 需要调整此处代码
-        const a = rowElement.querySelectorAll('a');
-        let href = null;
-        if (a && a.length > 0) {
-            href = a[0].getAttribute('href');
-        }
-        return href;
+
+        return queryFirst(githubSelectors.entryLinkCandidate, rowElement);
     }
+
+    /**
+     * 判断是否为文件列表中的特殊功能行，例如 "View all files"。
+     *
+     * @param {HTMLTableRowElement} rowElement
+     * @returns {boolean}
+     */
+    function isSpecialFileRow(rowElement) {
+        if (!rowElement) {
+            return false;
+        }
+
+        return githubSelectors.specialFileRowCandidate.some(selector => rowElement.matches(selector));
+    }
+
+    /**
+     * 从文件表格中提取所有文件/目录条目行。
+     *
+     * 通过条目链接反推所属的 tr。
+     *
+     * @param {HTMLElement} table
+     * @returns {HTMLTableRowElement[]}
+     */
+    function getEntryRows(table) {
+        if (!table) {
+            return [];
+        }
+
+        const links = queryAll(githubSelectors.entryLinkCandidate, table);
+
+        const rows = [];
+        const seenRows = new Set();
+
+        for (const link of links) {
+            const row = link.closest('tr');
+            if (!row || isSpecialFileRow(row) || seenRows.has(row)) {
+                continue;
+            }
+
+            seenRows.add(row);
+            rows.push(row);
+        }
+
+        return rows;
+    }
+
+    /**
+     * 定位当前页面中的仓库文件表格。
+     *
+     * 优先寻找包含文件/目录条目链接的 table，CSS class 只作为候选。
+     *
+     * @param {ParentNode} root
+     * @returns {HTMLTableElement|null}
+     */
+    function findRepositoryFileTable(root = document) {
+        const entryLinkSelector = joinSelectors(githubSelectors.entryLinkCandidate);
+
+        for (const selector of githubSelectors.tableCandidate) {
+            const tables = root.querySelectorAll(selector);
+            for (const table of tables) {
+                if (!(table instanceof HTMLTableElement)) {
+                    continue;
+                }
+
+                if (table.querySelector(entryLinkSelector)) {
+                    return table;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 获取当前页面对应的父目录 GitHub path。
+     *
+     * 例如:
+     * - 当前: /owner/repo/tree/main/src/utils
+     * - 返回: /owner/repo/tree/main/src
+     *
+     * 若当前位于仓库根目录，则返回 null。
+     *
+     * @returns {string|null}
+     */
+    function getParentDirectoryPath() {
+        const parts = location.pathname.split('/');
+        // ["", owner, repo, "tree", ref, ...path]
+        if (parts.length < 6 || parts[3] !== 'tree') {
+            return null;
+        }
+
+        const currentPathParts = parts.slice(5);
+        if (currentPathParts.length === 0) {
+            return null;
+        }
+
+        const parentPathParts = currentPathParts.slice(0, -1);
+        const parentParts = parts.slice(0, 5);
+        if (parentPathParts.length > 0) {
+            parentParts.push(...parentPathParts);
+        }
+
+        return parentParts.join('/');
+    }
+
+    /**
+     * 在文件表格中定位“上一级目录”对应的行。
+     *
+     * @param {HTMLElement} table
+     * @returns {HTMLTableRowElement|null}
+     */
+    function findParentDirectoryRow(table) {
+        if (!table) {
+            return null;
+        }
+        // 优先根据当前页面路径推导父目录链接，失败时回退使用 class 。
+        const parentPath = getParentDirectoryPath();
+        if (parentPath) {
+            const links = table.querySelectorAll('a[href]');
+            for (const link of links) {
+                const href = link.getAttribute('href');
+                if (href !== parentPath) {
+                    continue;
+                }
+
+                const row = link.closest('tr');
+                if (row && !isSpecialFileRow(row) && !getEntryLink(row)) {
+                    return row;
+                }
+            }
+        }
+
+        const fallbackRow = queryFirst(githubSelectors.parentDirRowFallbackCandidate, table);
+        return fallbackRow instanceof HTMLTableRowElement ? fallbackRow : null;
+    }
+
 
     function getSelectionEntries() {
         return Array.from(selectedEntries.values());
@@ -595,6 +779,26 @@
     function saveBlob(blob, downloadName) {
         saveAs(blob, downloadName);
     }
+
+    // 尝试多个选择器，返回第一个匹配的元素，无法匹配时返回 null
+    function queryFirst(selectors, root = document) {
+        for (const selector of selectors) {
+            const el = root.querySelector(selector);
+            if (el) return el;
+        }
+        return null;
+    }
+
+    // 将多个候选选择器拼成 querySelectorAll 可用的逗号表达式
+    function joinSelectors(selectors) {
+        return selectors.join(', ');
+    }
+
+    // 使用候选选择器组批量查询元素
+    function queryAll(selectors, root = document) {
+        return root.querySelectorAll(joinSelectors(selectors));
+    }
+
 
     GM_addStyle(`
         th.tm-left-cell {
