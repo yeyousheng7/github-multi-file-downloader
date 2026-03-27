@@ -160,6 +160,12 @@
      */
 
     /**
+     * @typedef {Object} DownloadExecutionResult
+     * @property {Array<DownloadItem & { bytes: Uint8Array }>} succeeded
+     * @property {Array<{ item: DownloadItem, error: Error }>} failed
+     */
+
+    /**
      * @typedef {Object} DownloadPlan
      * @property {DownloadItem[]} items 本次要下载的文件项
      * @property {'single'|'zip'} outputMode 输出模式：单文件或 ZIP
@@ -410,7 +416,21 @@
                 }
             }
 
-            await executeDownloadPlan(plan, { allowRetryPrompt: true });
+            const result = await executeDownloadPlan(plan);
+            if (result.failed.length === 0) {
+                return;
+            }
+
+            const shouldRetry = confirmRetryFailedItems(result);
+            if (!shouldRetry) {
+                return;
+            }
+
+            const retryPlan = buildRetryPlanFromFailed(plan, result.failed);
+            const retryResult = await executeDownloadPlan(retryPlan);
+            if (retryResult.failed.length > 0) {
+                alertFinalFailedItems(retryResult);
+            }
         } finally {
             resetDownloadButtonState();
         }
@@ -470,8 +490,13 @@
         }
     }
 
-    async function executeDownloadPlan(plan, options = { allowRetryPrompt: true }) {
-        const allowRetryPrompt = options.allowRetryPrompt ?? true;
+    /**
+     * 执行下载计划，并在存在成功文件时立即保存结果。
+     *     *
+     * @param {DownloadPlan} plan
+     * @returns {Promise<DownloadExecutionResult>}
+     */
+    async function executeDownloadPlan(plan) {
         const result = await fetchDownloadItems(plan.items);
 
         if (result.succeeded.length > 0) {
@@ -483,34 +508,13 @@
             } else {
                 alert(`未知的输出模式: ${plan.outputMode}`);
                 logger.error("download", `未知的输出模式: ${plan.outputMode}`);
-                return;
+                return result;
             }
             saveBlob(artifact.blob, artifact.downloadName);
             logger.info("download", `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个`);
         }
 
-        if (result.failed.length > 0) {
-            const failedMsg = result.failed
-                .slice(0, 5)
-                .map(f => f.item.outputPath)
-                .join('\n');
-
-            const suffix = result.failed.length > 5 ? '\n...' : '';
-            if (!allowRetryPrompt) {
-                alert("部分文件仍下载失败, 请检查网络或稍后重试。\n失败文件列表:\n" + failedMsg + suffix);
-                return;
-            }
-
-            const ok = confirm(
-                `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个。\n` +
-                `是否重试失败文件？\n${failedMsg}${suffix}`
-            );
-
-            if (ok) {
-                const retryPlan = buildRetryPlanFromFailed(plan, result.failed);
-                await executeDownloadPlan(retryPlan, { allowRetryPrompt: false });
-            }
-        }
+        return result;
     }
 
     /**
@@ -581,6 +585,45 @@
         await Promise.all(workers);
 
         return { succeeded, failed };
+    }
+
+    /**
+     * @param {DownloadExecutionResult} result
+     * @returns {boolean}
+     */
+    function confirmRetryFailedItems(result) {
+        const title = result.succeeded.length > 0
+            ? `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个。`
+            : `本次下载全部失败，共 ${result.failed.length} 个文件失败。`;
+
+        return confirm(
+            `${title}\n是否重试失败文件？\n${buildFailedItemsMessage(result.failed)}`
+        );
+    }
+
+    /**
+     * @param {DownloadExecutionResult} result
+     * @returns {void}
+     */
+    function alertFinalFailedItems(result) {
+        const title = result.succeeded.length > 0
+            ? "部分文件仍下载失败，请检查网络或稍后重试。"
+            : "文件仍然全部下载失败，请检查网络或稍后重试。";
+
+        alert(`${title}\n失败文件列表:\n${buildFailedItemsMessage(result.failed)}`);
+    }
+
+    /**
+     * @param {Array<{ item: DownloadItem, error: Error }>} failedItems
+     * @returns {string}
+     */
+    function buildFailedItemsMessage(failedItems) {
+        const failedMsg = failedItems
+            .slice(0, 5)
+            .map(f => f.item.outputPath)
+            .join('\n');
+
+        return failedItems.length > 5 ? `${failedMsg}\n...` : failedMsg;
     }
 
     /**
