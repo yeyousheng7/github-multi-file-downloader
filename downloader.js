@@ -6,11 +6,9 @@
 // @author       yys
 // @match        https://github.com/*
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
-// @require      https://unpkg.com/jszip@3.10.1/dist/jszip.min.js
 // @require      https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @grant        GM_addStyle
-// @grant        GM_download
 // @grant        GM_xmlhttpRequest
 // @connect      github.com
 // @connect      raw.githubusercontent.com
@@ -241,7 +239,6 @@
         }
 
         const td = document.createElement('td');
-        const refCell = rowElement.firstElementChild;
 
         td.className = `tm-left-cell`;
 
@@ -492,7 +489,8 @@
 
     /**
      * 执行下载计划，并在存在成功文件时立即保存结果。
-     *     *
+     * 此函数不涉及用户交互
+     * 
      * @param {DownloadPlan} plan
      * @returns {Promise<DownloadExecutionResult>}
      */
@@ -506,7 +504,6 @@
             } else if (plan.outputMode === 'zip') {
                 artifact = buildZipArtifact(result.succeeded, plan.zipFilename);
             } else {
-                alert(`未知的输出模式: ${plan.outputMode}`);
                 logger.error("download", `未知的输出模式: ${plan.outputMode}`);
                 return result;
             }
@@ -659,7 +656,7 @@
 
     /**
      * 从表格行中解析选中项
-     *
+     * 
      * @param {HTMLElement} rowElement
      * @returns {SelectionEntry|null}
      */
@@ -726,32 +723,11 @@
         }).join('/');
     }
 
-
-    /**
-     * 获取 GitHub 仓库列表中某一行对应条目的站内路径。
-     *
-     * 当前:
-     * - 文件: "/owner/repo/blob/ref/path/to/file"
-     * - 文件夹: "/owner/repo/tree/ref/path/to/folder"
-     *
-     * @param {HTMLElement} rowElement
-     * @returns {string|null}
-     */
-    function getFilePath(rowElement) {
-        const entryLink = getEntryLink(rowElement);
-        if (!entryLink) {
-            return null;
-        }
-
-        return entryLink.getAttribute('href');
-    }
-
-
     /**
      * 获取目录行中代表文件或文件夹的主链接。
      *
-     * 优先使用 aria-label 中带有 "(File)" 或 "(Directory)" 的链接，
-     * 失败时再退回到 href 中包含 /blob/ 或 /tree/ 的链接。
+     * 使用 aria-label 中带有 "(File)" 或 "(Directory)" 的链接，
+     * 如果没有则退回到 href 中包含 /blob/ 或 /tree/ 的链接。
      *
      * @param {HTMLElement} rowElement
      * @returns {HTMLAnchorElement|null}
