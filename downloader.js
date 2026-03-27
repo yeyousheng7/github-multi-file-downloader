@@ -75,6 +75,15 @@
         // 压缩等级
         COMPRESS_LEVEL: 3,
 
+        // 单个请求超时时间
+        REQUEST_TIMEOUT_MS: 15000,
+
+        // 单个文件失败后的重试次数
+        RETRY_COUNT: 2,
+
+        // 重试前等待时间
+        RETRY_DELAY_MS: 800,
+
         // 调试
         LOG_LEVEL: 'info',
 
@@ -401,7 +410,7 @@
                 }
             }
 
-            await executeDownloadPlan(plan);
+            await executeDownloadPlan(plan, { allowRetryPrompt: true });
         } finally {
             resetDownloadButtonState();
         }
@@ -448,30 +457,59 @@
         }
     }
 
-    async function executeDownloadPlan(plan) {
+    // failedItems: Array<{ item: DownloadItem, error: Error }>
+    function buildRetryPlanFromFailed(plan, failedItems) {
+        const items = failedItems.map(f => f.item);
+
+        return {
+            items,
+            outputMode: items.length === 1 ? 'single' : 'zip',
+            // plan 中的 zipFilename: github_files_${Date.now()}.zip
+            zipFilename: `_RETRY_${plan.zipFilename}`,
+            skippedFolders: [],
+        }
+    }
+
+    async function executeDownloadPlan(plan, options = { allowRetryPrompt: true }) {
+        const allowRetryPrompt = options.allowRetryPrompt ?? true;
         const result = await fetchDownloadItems(plan.items);
 
-        if (result.succeeded.length === 0) {
-            alert("下载失败，没有成功获取任何文件");
-            return;
+        if (result.succeeded.length > 0) {
+            let artifact;
+            if (plan.outputMode === 'single') {
+                artifact = buildSingleFileArtifact(result.succeeded[0]);
+            } else if (plan.outputMode === 'zip') {
+                artifact = buildZipArtifact(result.succeeded, plan.zipFilename);
+            } else {
+                alert(`未知的输出模式: ${plan.outputMode}`);
+                logger.error("download", `未知的输出模式: ${plan.outputMode}`);
+                return;
+            }
+            saveBlob(artifact.blob, artifact.downloadName);
+            logger.info("download", `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个`);
         }
-        let artifact;
-        if (plan.outputMode === 'single') {
-            artifact = buildSingleFileArtifact(result.succeeded[0]);
-        } else if (plan.outputMode === 'zip') {
-            artifact = buildZipArtifact(result.succeeded, plan.zipFilename);
-        } else {
-            alert(`未知的输出模式: ${plan.outputMode}`);
-            return;
-        }
-
-
-        saveBlob(artifact.blob, artifact.downloadName);
-        logger.info("download", `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个`);
 
         if (result.failed.length > 0) {
-            // TODO: 优化提示或提供重试功能
-            alert(`部分文件下载失败: \n${result.failed.map(f => f.item.githubPath).join('\n')}`);
+            const failedMsg = result.failed
+                .slice(0, 5)
+                .map(f => f.item.outputPath)
+                .join('\n');
+
+            const suffix = result.failed.length > 5 ? '\n...' : '';
+            if (!allowRetryPrompt) {
+                alert("部分文件仍下载失败, 请检查网络或稍后重试。\n失败文件列表:\n" + failedMsg + suffix);
+                return;
+            }
+
+            const ok = confirm(
+                `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个。\n` +
+                `是否重试失败文件？\n${failedMsg}${suffix}`
+            );
+
+            if (ok) {
+                const retryPlan = buildRetryPlanFromFailed(plan, result.failed);
+                await executeDownloadPlan(retryPlan, { allowRetryPrompt: false });
+            }
         }
     }
 
@@ -515,7 +553,7 @@
 
                 try {
                     logger.debug("download", `正在下载 [剩余:${queue.length}]: ${item.outputPath}`);
-                    const buf = await gmFetchArrayBuffer(item.rawUrl);
+                    const buf = await fetchArrayBufferWithRetry(item);
 
                     succeeded.push({
                         ...item,
@@ -543,6 +581,37 @@
         await Promise.all(workers);
 
         return { succeeded, failed };
+    }
+
+    /**
+     * 下载单个文件，并在失败时按配置重试。
+     *
+     * @param {DownloadItem} item
+     * @returns {Promise<ArrayBuffer>}
+     */
+    async function fetchArrayBufferWithRetry(item) {
+        const maxAttempts = SETTINGS.RETRY_COUNT + 1;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return await gmFetchArrayBuffer(item.rawUrl, {
+                    timeoutMs: SETTINGS.REQUEST_TIMEOUT_MS,
+                });
+            } catch (err) {
+                if (attempt >= maxAttempts) {
+                    throw err;
+                }
+
+                logger.warn(
+                    "network",
+                    `下载失败，准备重试 (${attempt}/${SETTINGS.RETRY_COUNT}): ${item.outputPath}`,
+                    err
+                );
+                await sleep(SETTINGS.RETRY_DELAY_MS);
+            }
+        }
+
+        throw new Error(`下载重试异常结束: ${item.outputPath}`);
     }
 
     /**
@@ -796,12 +865,20 @@
         return `https://github.com/${parts.join('/')}`;
     }
 
-    function gmFetchArrayBuffer(url) {
+    /**
+     * @param {string} url
+     * @param {{ timeoutMs?: number }} [options]
+     * @returns {Promise<ArrayBuffer>}
+     */
+    function gmFetchArrayBuffer(url, options = {}) {
+        const timeoutMs = options.timeoutMs ?? SETTINGS.REQUEST_TIMEOUT_MS;
+
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: "GET",
                 url,
                 responseType: "arraybuffer",
+                timeout: timeoutMs,
                 anonymous: false,
                 withCredentials: true, // 让 github.com 登录态生效
                 onload: (res) => {
@@ -809,8 +886,17 @@
                     else reject(new Error(`HTTP ${res.status}`));
                 },
                 onerror: () => reject(new Error("Network error")),
+                ontimeout: () => reject(new Error(`Request timeout after ${timeoutMs}ms`)),
             });
         });
+    }
+
+    /**
+     * @param {number} ms
+     * @returns {Promise<void>}
+     */
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     function saveBlob(blob, downloadName) {
