@@ -64,6 +64,13 @@
             '[data-testid="latest-commit"]',
             '[data-testid="latest-commit-details"]',
         ],
+        // 分支选择按钮
+        refButtonCandidate: [
+            '#ref-picker-repos-header-ref-selector',
+            'button[data-testid="anchor-button"][id="ref-picker-repos-header-ref-selector"]',
+            'button[aria-label$=" branch"][data-testid="anchor-button"]',
+            'button[aria-label$=" tag"][data-testid="anchor-button"]',
+        ],
     };
 
     const SETTINGS = {
@@ -141,6 +148,15 @@
      * @property {string} githubPath
      * @property {string} repoPath
      * @property {string} fileName
+     */
+
+    /**
+     * @typedef {Object} GitHubEntryContext
+     * @property {string} owner
+     * @property {string} repo
+     * @property {'blob'|'tree'} viewKind
+     * @property {string} ref
+     * @property {string} repoPath
      */
 
     /**
@@ -671,11 +687,11 @@
             return null;
         }
 
-        const parts = path.split('/');
-        // ["", owner, repo, "blob"|"tree", ref, ...path]
-        if (parts.length < 6) {
+        const ctx = parseGitHubEntryContext(path);
+        if (!ctx) {
             return null;
         }
+
 
         const ariaLabel = entryLink.getAttribute('aria-label') || '';
 
@@ -684,9 +700,9 @@
             kind = 'file';
         } else if (ariaLabel.endsWith(', (Directory)')) {
             kind = 'folder';
-        } else if (parts[3] === 'blob') {
+        } else if (ctx.viewKind === 'blob') {
             kind = 'file';
-        } else if (parts[3] === 'tree') {
+        } else if (ctx.viewKind === 'tree') {
             kind = 'folder';
         }
 
@@ -694,13 +710,13 @@
             return null;
         }
 
-        const repoPath = decodeGitHubRepoPath(parts.slice(5));
-        const fileName = repoPath.split('/').pop() || '';
+        // 文件名通常不包含路径符号，可直接取最后一段
+        const fileName = ctx.repoPath.split('/').pop() || '';
 
         return {
             kind,
             githubPath: path,
-            repoPath,
+            repoPath: ctx.repoPath, // 仓库内相对路径
             fileName,
         };
     }
@@ -885,6 +901,56 @@
     }
 
     /**
+     * 从 GitHub 页面路径和当前 ref 解析仓库上下文。
+     *
+     * @param {string} githubPath
+     * @returns {GitHubEntryContext|null}
+     */
+    function parseGitHubEntryContext(githubPath) {
+        if (!githubPath) {
+            return null;
+        }
+
+        const ref = getCurrentRefName();
+        if (!ref) {
+            logger.warn("plan", "无法获取当前 ref");
+            return null;
+        }
+
+        const parts = githubPath.split('/');
+        // ["", owner, repo, "blob"|"tree", ...refAndPath]
+        if (parts.length < 6) {
+            return null;
+        }
+
+        const owner = parts[1];
+        const repo = parts[2];
+        const viewKind = parts[3];
+
+        if (!owner || !repo || (viewKind !== 'blob' && viewKind !== 'tree')) {
+            return null;
+        }
+
+        const refSegments = ref.split('/').filter(Boolean);
+        const pathStartIndex = 4 + refSegments.length;
+        const repoPathSegments = parts.slice(pathStartIndex);
+
+        if (repoPathSegments.length === 0) {
+            return null;
+        }
+
+        const repoPath = decodeGitHubRepoPath(repoPathSegments);
+
+        return {
+            owner,
+            repo,
+            viewKind,
+            ref,
+            repoPath,
+        };
+    }
+
+    /**
      * @param {string} url
      * @param {{ timeoutMs?: number }} [options]
      * @returns {Promise<ArrayBuffer>}
@@ -966,6 +1032,37 @@
     function getDownloadButton() {
         return document.querySelector('.tm-download-btn');
     }
+
+    function getCurrentRefButton() {
+        return queryFirst(githubSelectors.refButtonCandidate);
+    }
+
+    function getCurrentRefName() {
+        const button = getCurrentRefButton();
+        if (!button) {
+            return null;
+        }
+
+        const label = button.getAttribute('aria-label') || '';
+        const text = button.textContent?.trim() || '';
+
+        if (text) {
+            return text;
+        }
+
+        // RefButton 的 aria-label 可能包含分支或标签名称
+        // label 值可能为： "main branch"
+        if (label.endsWith(' branch')) {
+            return label.slice(0, -' branch'.length);
+        }
+        // label 值可能为： "v1.0.0 tag"
+        if (label.endsWith(' tag')) {
+            return label.slice(0, -' tag'.length);
+        }
+
+        return null;
+    }
+
 
     GM_addStyle(`
         th.tm-left-cell {
