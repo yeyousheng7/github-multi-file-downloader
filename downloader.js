@@ -160,6 +160,12 @@
      */
 
     /**
+     * @typedef {Object} ResolveSelectionResult
+     * @property {DownloadItem[]} items
+     * @property {SelectionEntry[]} failedEntries
+     */
+
+    /**
      * @typedef {Object} DownloadItem
      * @property {string} githubPath GitHub 页面中的站内路径，例如 /owner/repo/blob/main/src/a.js
      * @property {string} rawUrl 文件下载地址
@@ -184,7 +190,7 @@
      * @property {DownloadItem[]} items 本次要下载的文件项
      * @property {'single'|'zip'} outputMode 输出模式：单文件或 ZIP
      * @property {string} zipFilename ZIP 下载文件名
-     * @property {string[]} skippedFolders 跳过的文件夹列表
+     * @property {SelectionEntry[]} failedEntries 下载计划中解析失败的条目列表
      */
 
 
@@ -410,20 +416,27 @@
         setDownloadButtonState({ disabled: true, text: '下载中...' });
 
         try {
-            const plan = buildDownloadPlan(entries);
+            const plan = await buildDownloadPlan(entries);
             if (plan.items.length === 0) {
-                alert("没有有效的文件可下载！(暂不支持文件夹下载)");
+                alert("没有有效的文件可下载！");
                 return;
             }
 
-            if (plan.skippedFolders.length > 0) {
-                let skippedListTop5Msg =
-                    plan.skippedFolders
+            if (plan.failedEntries.length > 0) {
+                let failedListTop5Msg =
+                    plan.failedEntries
                         .slice(0, 5)
-                        .map((folderPath) => decodeGitHubRepoPath(folderPath.split('/')))
+                        .map(entry => entry.repoPath || entry.githubPath)
                         .join('\n');
-                if (plan.skippedFolders.length > 5) skippedListTop5Msg += '\n...';
-                let ok = confirm(`有 ${plan.skippedFolders.length} 个文件夹被跳过，是否继续下载？\n${skippedListTop5Msg}`);
+
+                if (plan.failedEntries.length > 5) {
+                    failedListTop5Msg += '\n...';
+                }
+
+                const ok = confirm(
+                    `有 ${plan.failedEntries.length} 个条目解析失败，是否继续下载其余成功项？\n${failedListTop5Msg}`
+                );
+
                 if (!ok) {
                     return;
                 }
@@ -450,34 +463,121 @@
     }
 
     /**
+     * 将单个文件选中项转换为下载项。
+     *
+     * @param {SelectionEntry} entry
+     * @returns {DownloadItem|null}
+     */
+    function toDownloadItem(entry) {
+        if (!entry || entry.kind !== 'file') {
+            return null;
+        }
+
+        const rawUrl = blobToGithubRawUrl(entry.githubPath);
+        if (!rawUrl) {
+            logger.warn("plan", `无法转换为 raw URL: ${entry.githubPath}`);
+            return null;
+        }
+
+        return {
+            githubPath: entry.githubPath,
+            rawUrl,
+            outputPath: entry.repoPath,
+            fileName: entry.fileName,
+        };
+    }
+
+    /**
+     * 将选中项解析为一个或多个下载项。
+     *
+     * @param {SelectionEntry} entry
+     * @returns {Promise<ResolveSelectionResult>}
+     */
+    async function resolveSelectionEntry(entry) {
+        if (!entry) {
+            return { items: [], failedEntries: [] };
+        }
+
+        if (entry.kind === 'file') {
+            const item = toDownloadItem(entry);
+            return item ? { items: [item], failedEntries: [] } : { items: [], failedEntries: [entry] };
+        }
+
+        if (entry.kind === 'folder') {
+            try {
+                const items = await expandFolderEntry(entry);
+                return { items, failedEntries: [] };
+            } catch (error) {
+                logger.error("plan", `展开文件夹失败: ${entry.githubPath}`, error);
+                return { items: [], failedEntries: [entry] };
+            }
+        }
+
+        return { items: [], failedEntries: [] };
+    }
+
+    /**
+     * 展开文件夹选中项为下载项列表。
+     *
+     * @param {SelectionEntry} entry
+     * @returns {Promise<DownloadItem[]>}
+     */
+    async function expandFolderEntry(entry) {
+        const ctx = parseGitHubEntryContext(entry.githubPath);
+        if (!ctx || ctx.viewKind !== 'tree') {
+            throw new Error(`无法解析文件夹上下文: ${entry?.githubPath}`);
+        }
+
+        const treeData = await fetchGitTreeRecursive(ctx);
+        if (!treeData || !Array.isArray(treeData.tree)) {
+            throw new Error(`Tree API 返回异常: ${entry.githubPath}`);
+        }
+
+        if(treeData.truncated) {
+            throw new Error(`文件夹过大，无法展开: ${entry.githubPath}`);
+        }
+
+        const folderPrefix = `${ctx.repoPath}/`;
+        const items = [];
+
+        for (const node of treeData.tree) {
+            if (node.type !== 'blob') {
+                continue;
+            }
+
+            if (!node.path.startsWith(folderPrefix)) {
+                continue;
+            }
+
+            const encodedRepoPath = encodeGitHubRepoPath(node.path);
+
+            items.push({
+                githubPath: `/${ctx.owner}/${ctx.repo}/blob/${ctx.ref}/${encodedRepoPath}`,
+                rawUrl: `https://github.com/${ctx.owner}/${ctx.repo}/raw/${ctx.ref}/${encodedRepoPath}`,
+                outputPath: node.path,
+                fileName: node.path.split('/').pop() || '',
+            });
+        }
+
+        return items;
+    }
+
+
+
+    /**
      * 根据选中项构建下载计划
      *
      * @param {SelectionEntry[]} entries
-     * @returns {DownloadPlan}
+     * @returns {Promise<DownloadPlan>}
      */
-    function buildDownloadPlan(entries) {
+    async function buildDownloadPlan(entries) {
         const items = [];
-        const skippedFolders = [];
+        const failedEntries = [];
 
         for (const entry of entries) {
-            if (entry.kind === 'folder') {
-                skippedFolders.push(entry.githubPath);
-                logger.warn("plan", `跳过文件夹: ${entry.githubPath}`);
-                continue;
-            }
-
-            const rawUrl = blobToGithubRawUrl(entry.githubPath);
-            if (!rawUrl) {
-                logger.warn("plan", `无法转换为 raw URL, 跳过: ${entry.githubPath}`);
-                continue;
-            }
-
-            items.push({
-                githubPath: entry.githubPath,
-                rawUrl,
-                outputPath: entry.repoPath,
-                fileName: entry.fileName,
-            });
+            const resolved = await resolveSelectionEntry(entry);
+            items.push(...resolved.items);
+            failedEntries.push(...resolved.failedEntries);
         }
 
         logger.info("plan", `下载计划已生成，文件数: ${items.length}，模式: ${items.length === 1 ? 'single' : 'zip'}`);
@@ -486,7 +586,7 @@
             items,
             outputMode: items.length === 1 ? 'single' : 'zip',
             zipFilename: `github_files_${Date.now()}.zip`,
-            skippedFolders,
+            failedEntries,
         }
     }
 
@@ -499,7 +599,8 @@
             outputMode: items.length === 1 ? 'single' : 'zip',
             // plan 中的 zipFilename: github_files_${Date.now()}.zip
             zipFilename: `_RETRY_${plan.zipFilename}`,
-            skippedFolders: [],
+            failedEntries: [], // 重试计划只包含已解析成功但下载失败的文件项
+
         }
     }
 
@@ -740,6 +841,20 @@
     }
 
     /**
+     * 将仓库相对路径编码回 GitHub URL 可用形式。
+     *
+     * @param {string} repoPath
+     * @returns {string}
+     */
+    function encodeGitHubRepoPath(repoPath) {
+        return repoPath
+            .split('/')
+            .filter(Boolean)
+            .map(segment => encodeURIComponent(segment))
+            .join('/');
+    }
+
+    /**
      * 获取目录行中代表文件或文件夹的主链接。
      *
      * 使用 aria-label 中带有 "(File)" 或 "(Directory)" 的链接，
@@ -975,6 +1090,50 @@
             });
         });
     }
+
+    /**
+     * @param {string} url
+     * @returns {Promise<any>}
+     */
+    function gmFetchJson(url) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: "GET",
+                url,
+                responseType: "json",
+                timeout: SETTINGS.REQUEST_TIMEOUT_MS,
+                anonymous: false,
+                withCredentials: true,
+                headers: {
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                onload: (res) => {
+                    if (res.status >= 200 && res.status < 300) {
+                        resolve(res.response);
+                    } else {
+                        reject(new Error(`HTTP ${res.status}`));
+                    }
+                },
+                onerror: () => reject(new Error("Network error")),
+                ontimeout: () => reject(new Error(`Request timeout after ${SETTINGS.REQUEST_TIMEOUT_MS}ms`)),
+            });
+        });
+    }
+
+    /**
+     * 获取当前 ref 下的完整 Git tree。
+     *
+     * @param {GitHubEntryContext} ctx
+     * @returns {Promise<any>}
+     */
+    async function fetchGitTreeRecursive(ctx) {
+        const treeRef = encodeURIComponent(ctx.ref);
+        const url = `https://api.github.com/repos/${ctx.owner}/${ctx.repo}/git/trees/${treeRef}?recursive=1`;
+
+        return await gmFetchJson(url);
+    }
+
 
     /**
      * @param {number} ms
