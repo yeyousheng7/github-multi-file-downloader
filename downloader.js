@@ -193,7 +193,14 @@
      * @property {SelectionEntry[]} failedEntries 下载计划中解析失败的条目列表
      */
 
-
+    /**
+     * @typedef {Object} DialogOptions
+     * @property {string} title
+     * @property {string} message
+     * @property {string} [confirmText]
+     * @property {string} [cancelText]
+     * @property {boolean} [confirmOnly]
+     */
 
     logger.info("app", "Github Downloader 脚本启动");
 
@@ -218,6 +225,29 @@
         addCheckboxes(table);
         addDownloadButton(table);
         bindTableEvents(table);
+    }
+
+    function observeRootChanges() {
+        const root = document.getElementById(githubAtrribute.githubRootId);
+        if (!root) {
+            logger.warn("app", "未找到页面根级元素, 退出");
+            return;
+        }
+        if (root.dataset.tmObserved === '1') return;
+        root.dataset.tmObserved = '1';
+
+        let t = null;
+        const schedule = () => {
+            clearTimeout(t);
+            t = setTimeout(apply, 50); // 简单防抖：DOM 连续变化时只跑一次
+        };
+
+        const obs = new MutationObserver(schedule);
+        obs.observe(root, { childList: true, subtree: true });
+
+        window.addEventListener('popstate', schedule);
+
+        schedule();
     }
 
     function addCheckboxes(table) {
@@ -349,29 +379,6 @@
         });
     }
 
-    function observeRootChanges() {
-        const root = document.getElementById(githubAtrribute.githubRootId);
-        if (!root) {
-            logger.warn("app", "未找到页面根级元素, 退出");
-            return;
-        }
-        if (root.dataset.tmObserved === '1') return;
-        root.dataset.tmObserved = '1';
-
-        let t = null;
-        const schedule = () => {
-            clearTimeout(t);
-            t = setTimeout(apply, 50); // 简单防抖：DOM 连续变化时只跑一次
-        };
-
-        const obs = new MutationObserver(schedule);
-        obs.observe(root, { childList: true, subtree: true });
-
-        window.addEventListener('popstate', schedule);
-
-        schedule();
-    }
-
     function bindTableEvents(table) {
         if (!table) {
             logger.warn("ui", "代码表格元素为空, 退出");
@@ -408,7 +415,10 @@
     async function startDownload() {
         const entries = getSelectionEntries();
         if (entries.length === 0) {
-            alert("未选择任何文件！");
+            await showAlertDialog({
+                title: '提示',
+                message: '未选择任何文件！',
+            });
             return;
         }
 
@@ -417,11 +427,6 @@
 
         try {
             const plan = await buildDownloadPlan(entries);
-            if (plan.items.length === 0) {
-                alert("没有有效的文件可下载！");
-                return;
-            }
-
             if (plan.failedEntries.length > 0) {
                 let failedListTop5Msg =
                     plan.failedEntries
@@ -433,13 +438,32 @@
                     failedListTop5Msg += '\n...';
                 }
 
-                const ok = confirm(
-                    `有 ${plan.failedEntries.length} 个条目解析失败，是否继续下载其余成功项？\n${failedListTop5Msg}`
-                );
+                if (plan.items.length === 0) {
+                    await showAlertDialog({
+                        title: '没有可下载的文件',
+                        message: `所选条目全部解析失败，无法继续下载。\n${failedListTop5Msg}`,
+                    });
+                    return;
+                }
+
+                const ok = await showConfirmDialog({
+                    title: '继续下载其余成功项？',
+                    message: `有 ${plan.failedEntries.length} 个条目解析失败，是否继续下载其余成功项？\n${failedListTop5Msg}`,
+                    confirmText: '继续下载',
+                    cancelText: '取消',
+                });
 
                 if (!ok) {
                     return;
                 }
+            }
+
+            if (plan.items.length === 0) {
+                await showAlertDialog({
+                    title: '没有可下载的文件',
+                    message: '没有有效的文件可下载！',
+                });
+                return;
             }
 
             const result = await executeDownloadPlan(plan);
@@ -447,7 +471,7 @@
                 return;
             }
 
-            const shouldRetry = confirmRetryFailedItems(result);
+            const shouldRetry = await confirmRetryFailedItems(result);
             if (!shouldRetry) {
                 return;
             }
@@ -455,114 +479,12 @@
             const retryPlan = buildRetryPlanFromFailed(plan, result.failed);
             const retryResult = await executeDownloadPlan(retryPlan);
             if (retryResult.failed.length > 0) {
-                alertFinalFailedItems(retryResult);
+                await alertFinalFailedItems(retryResult);
             }
         } finally {
             resetDownloadButtonState();
         }
     }
-
-    /**
-     * 将单个文件选中项转换为下载项。
-     *
-     * @param {SelectionEntry} entry
-     * @returns {DownloadItem|null}
-     */
-    function toDownloadItem(entry) {
-        if (!entry || entry.kind !== 'file') {
-            return null;
-        }
-
-        const rawUrl = blobToGithubRawUrl(entry.githubPath);
-        if (!rawUrl) {
-            logger.warn("plan", `无法转换为 raw URL: ${entry.githubPath}`);
-            return null;
-        }
-
-        return {
-            githubPath: entry.githubPath,
-            rawUrl,
-            outputPath: entry.repoPath,
-            fileName: entry.fileName,
-        };
-    }
-
-    /**
-     * 将选中项解析为一个或多个下载项。
-     *
-     * @param {SelectionEntry} entry
-     * @returns {Promise<ResolveSelectionResult>}
-     */
-    async function resolveSelectionEntry(entry) {
-        if (!entry) {
-            return { items: [], failedEntries: [] };
-        }
-
-        if (entry.kind === 'file') {
-            const item = toDownloadItem(entry);
-            return item ? { items: [item], failedEntries: [] } : { items: [], failedEntries: [entry] };
-        }
-
-        if (entry.kind === 'folder') {
-            try {
-                const items = await expandFolderEntry(entry);
-                return { items, failedEntries: [] };
-            } catch (error) {
-                logger.error("plan", `展开文件夹失败: ${entry.githubPath}`, error);
-                return { items: [], failedEntries: [entry] };
-            }
-        }
-
-        return { items: [], failedEntries: [] };
-    }
-
-    /**
-     * 展开文件夹选中项为下载项列表。
-     *
-     * @param {SelectionEntry} entry
-     * @returns {Promise<DownloadItem[]>}
-     */
-    async function expandFolderEntry(entry) {
-        const ctx = parseGitHubEntryContext(entry.githubPath);
-        if (!ctx || ctx.viewKind !== 'tree') {
-            throw new Error(`无法解析文件夹上下文: ${entry?.githubPath}`);
-        }
-
-        const treeData = await fetchGitTreeRecursive(ctx);
-        if (!treeData || !Array.isArray(treeData.tree)) {
-            throw new Error(`Tree API 返回异常: ${entry.githubPath}`);
-        }
-
-        if(treeData.truncated) {
-            throw new Error(`文件夹过大，无法展开: ${entry.githubPath}`);
-        }
-
-        const folderPrefix = `${ctx.repoPath}/`;
-        const items = [];
-
-        for (const node of treeData.tree) {
-            if (node.type !== 'blob') {
-                continue;
-            }
-
-            if (!node.path.startsWith(folderPrefix)) {
-                continue;
-            }
-
-            const encodedRepoPath = encodeGitHubRepoPath(node.path);
-
-            items.push({
-                githubPath: `/${ctx.owner}/${ctx.repo}/blob/${ctx.ref}/${encodedRepoPath}`,
-                rawUrl: `https://github.com/${ctx.owner}/${ctx.repo}/raw/${ctx.ref}/${encodedRepoPath}`,
-                outputPath: node.path,
-                fileName: node.path.split('/').pop() || '',
-            });
-        }
-
-        return items;
-    }
-
-
 
     /**
      * 根据选中项构建下载计划
@@ -629,6 +551,106 @@
         }
 
         return result;
+    }
+
+    /**
+     * 将选中项解析为一个或多个下载项。
+     *
+     * @param {SelectionEntry} entry
+     * @returns {Promise<ResolveSelectionResult>}
+     */
+    async function resolveSelectionEntry(entry) {
+        if (!entry) {
+            return { items: [], failedEntries: [] };
+        }
+
+        if (entry.kind === 'file') {
+            const item = toDownloadItem(entry);
+            return item ? { items: [item], failedEntries: [] } : { items: [], failedEntries: [entry] };
+        }
+
+        if (entry.kind === 'folder') {
+            try {
+                const items = await expandFolderEntry(entry);
+                return { items, failedEntries: [] };
+            } catch (error) {
+                logger.error("plan", `展开文件夹失败: ${entry.githubPath}`, error);
+                return { items: [], failedEntries: [entry] };
+            }
+        }
+
+        return { items: [], failedEntries: [] };
+    }
+
+    /**
+     * 将单个文件选中项转换为下载项。
+     *
+     * @param {SelectionEntry} entry
+     * @returns {DownloadItem|null}
+     */
+    function toDownloadItem(entry) {
+        if (!entry || entry.kind !== 'file') {
+            return null;
+        }
+
+        const rawUrl = blobToGithubRawUrl(entry.githubPath);
+        if (!rawUrl) {
+            logger.warn("plan", `无法转换为 raw URL: ${entry.githubPath}`);
+            return null;
+        }
+
+        return {
+            githubPath: entry.githubPath,
+            rawUrl,
+            outputPath: entry.repoPath,
+            fileName: entry.fileName,
+        };
+    }
+
+    /**
+     * 展开文件夹选中项为下载项列表。
+     *
+     * @param {SelectionEntry} entry
+     * @returns {Promise<DownloadItem[]>}
+     */
+    async function expandFolderEntry(entry) {
+        const ctx = parseGitHubEntryContext(entry.githubPath);
+        if (!ctx || ctx.viewKind !== 'tree') {
+            throw new Error(`无法解析文件夹上下文: ${entry?.githubPath}`);
+        }
+
+        const treeData = await fetchGitTreeRecursive(ctx);
+        if (!treeData || !Array.isArray(treeData.tree)) {
+            throw new Error(`Tree API 返回异常: ${entry.githubPath}`);
+        }
+
+        if(treeData.truncated) {
+            throw new Error(`文件夹过大，无法展开: ${entry.githubPath}`);
+        }
+
+        const folderPrefix = `${ctx.repoPath}/`;
+        const items = [];
+
+        for (const node of treeData.tree) {
+            if (node.type !== 'blob') {
+                continue;
+            }
+
+            if (!node.path.startsWith(folderPrefix)) {
+                continue;
+            }
+
+            const encodedRepoPath = encodeGitHubRepoPath(node.path);
+
+            items.push({
+                githubPath: `/${ctx.owner}/${ctx.repo}/blob/${ctx.ref}/${encodedRepoPath}`,
+                rawUrl: `https://github.com/${ctx.owner}/${ctx.repo}/raw/${ctx.ref}/${encodedRepoPath}`,
+                outputPath: node.path,
+                fileName: node.path.split('/').pop() || '',
+            });
+        }
+
+        return items;
     }
 
     /**
@@ -705,27 +727,40 @@
      * @param {DownloadExecutionResult} result
      * @returns {boolean}
      */
-    function confirmRetryFailedItems(result) {
+    async function confirmRetryFailedItems(result) {
         const title = result.succeeded.length > 0
             ? `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个。`
             : `本次下载全部失败，共 ${result.failed.length} 个文件失败。`;
 
-        return confirm(
-            `${title}\n是否重试失败文件？\n${buildFailedItemsMessage(result.failed)}`
-        );
+        return await showConfirmDialog({
+            title: '是否重试失败文件？',
+            message: `${title}\n是否重试失败文件？\n${buildFailedItemsMessage(result.failed)}`,
+            confirmText: '重试',
+            cancelText: '取消',
+        });
     }
+
 
     /**
      * @param {DownloadExecutionResult} result
      * @returns {void}
      */
-    function alertFinalFailedItems(result) {
+    async function alertFinalFailedItems(result) {
         const title = result.succeeded.length > 0
-            ? "部分文件仍下载失败，请检查网络或稍后重试。"
-            : "文件仍然全部下载失败，请检查网络或稍后重试。";
+            ? '部分文件仍下载失败'
+            : '文件仍然全部下载失败';
 
-        alert(`${title}\n失败文件列表:\n${buildFailedItemsMessage(result.failed)}`);
+        const messagePrefix = result.succeeded.length > 0
+            ? '部分文件仍下载失败，请检查网络或稍后重试。'
+            : '文件仍然全部下载失败，请检查网络或稍后重试。';
+
+        await showAlertDialog({
+            title,
+            message: `${messagePrefix}\n失败文件列表:\n${buildFailedItemsMessage(result.failed)}`,
+            confirmText: '知道了',
+        });
     }
+
 
     /**
      * @param {Array<{ item: DownloadItem, error: Error }>} failedItems
@@ -1143,8 +1178,155 @@
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
+    // Dialog & UI Helpers
     function saveBlob(blob, downloadName) {
         saveAs(blob, downloadName);
+    }
+
+    let activeDialogResolver = null;
+    let activeDialogOverlay = null;
+
+    /**
+     * 显示通用弹窗。
+     *
+     * @param {DialogOptions} options
+     * @returns {Promise<boolean>}
+     */
+    function showDialog(options) {
+        const {
+            title,
+            message,
+            confirmText = '确定',
+            cancelText = '取消',
+            confirmOnly = false,
+        } = options;
+
+        closeActiveDialog(false);
+
+        const overlay = document.createElement('div');
+        overlay.className = 'tm-dialog-overlay';
+        overlay.setAttribute('aria-hidden', 'false');
+
+        const dialog = document.createElement('div');
+        dialog.className = 'tm-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+
+        const header = document.createElement('div');
+        header.className = 'tm-dialog-header';
+
+        const titleEl = document.createElement('h2');
+        titleEl.className = 'tm-dialog-title';
+        titleEl.textContent = title;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'tm-dialog-close';
+        closeBtn.setAttribute('aria-label', '关闭弹窗');
+        closeBtn.textContent = '×';
+
+        const content = document.createElement('div');
+        content.className = 'tm-dialog-content';
+        content.textContent = message;
+
+        const footer = document.createElement('div');
+        footer.className = 'tm-dialog-footer';
+
+        closeBtn.addEventListener('click', () => closeActiveDialog(false));
+
+        if (!confirmOnly) {
+            footer.appendChild(createDialogButton(cancelText, '', () => closeActiveDialog(false)));
+        }
+        footer.appendChild(createDialogButton(confirmText, 'primary', () => closeActiveDialog(true)));
+
+        header.appendChild(titleEl);
+        header.appendChild(closeBtn);
+        dialog.appendChild(header);
+        dialog.appendChild(content);
+        dialog.appendChild(footer);
+        overlay.appendChild(dialog);
+
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) {
+                closeActiveDialog(false);
+            }
+        });
+
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                closeActiveDialog(false);
+            }
+        };
+
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', onKeyDown);
+        activeDialogOverlay = overlay;
+        overlay.classList.add('is-open');
+
+        return new Promise((resolve) => {
+            activeDialogResolver = (result) => {
+                document.removeEventListener('keydown', onKeyDown);
+                resolve(result);
+            };
+        });
+    }
+
+    /**
+     * @param {{ title: string, message: string, confirmText?: string }} options
+     * @returns {Promise<boolean>}
+     */
+    function showAlertDialog(options) {
+        return showDialog({
+            ...options,
+            confirmOnly: true,
+            confirmText: options.confirmText || '确定',
+        });
+    }
+
+    /**
+     * @param {{ title: string, message: string, confirmText?: string, cancelText?: string }} options
+     * @returns {Promise<boolean>}
+     */
+    function showConfirmDialog(options) {
+        return showDialog({
+            ...options,
+            confirmOnly: false,
+            confirmText: options.confirmText || '继续',
+            cancelText: options.cancelText || '取消',
+        });
+    }
+
+    /**
+     * @param {string} text
+     * @param {string} extraClass
+     * @param {() => void} onClick
+     * @returns {HTMLButtonElement}
+     */
+    function createDialogButton(text, extraClass, onClick) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `tm-dialog-btn ${extraClass}`.trim();
+        button.textContent = text;
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
+    /**
+     * 关闭当前活动弹窗，并返回结果。
+     *
+     * @param {boolean} result
+     */
+    function closeActiveDialog(result) {
+        if (activeDialogOverlay) {
+            activeDialogOverlay.remove();
+            activeDialogOverlay = null;
+        }
+
+        if (activeDialogResolver) {
+            const resolver = activeDialogResolver;
+            activeDialogResolver = null;
+            resolver(result);
+        }
     }
 
     // 尝试多个选择器，返回第一个匹配的元素，无法匹配时返回 null
@@ -1224,6 +1406,100 @@
 
 
     GM_addStyle(`
+        .tm-dialog-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: rgba(27, 31, 36, 0.5);
+        }
+        .tm-dialog-overlay.is-open {
+            display: flex;
+        }
+        .tm-dialog {
+            width: min(560px, calc(100vw - 32px));
+            max-height: min(78vh, 760px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            background: #ffffff;
+            color: #24292f;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        .tm-dialog-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 24px 24px 8px 24px;
+        }
+        .tm-dialog-title {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+            line-height: 1.4;
+        }
+        .tm-dialog-close {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: #57606a;
+            font-size: 24px;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .tm-dialog-close:hover {
+            background: rgba(175, 184, 193, 0.2);
+            color: #24292f;
+        }
+        .tm-dialog-content {
+            padding: 12px 24px 24px 24px;
+            max-height: 44vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            color: #57606a;
+            background: inherit;
+        }
+        .tm-dialog-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 0 24px 24px 24px;
+        }
+        .tm-dialog-btn {
+            appearance: none;
+            border-radius: 6px;
+            border: 1px solid #d0d7de;
+            background: #f6f8fa;
+            color: #24292f;
+            font: inherit;
+            font-weight: 500;
+            padding: 8px 16px;
+            cursor: pointer;
+        }
+        .tm-dialog-btn:hover {
+            background: #eef2f6;
+        }
+        .tm-dialog-btn.primary {
+            background: #1f883d;
+            border-color: rgba(27, 31, 36, 0.15);
+            color: #ffffff;
+        }
+        .tm-dialog-btn.primary:hover {
+            background: #1a7f37;
+        }
         th.tm-left-cell {
             box-sizing: border-box !important;
             width: 32px !important;
@@ -1255,6 +1531,43 @@
         button.tm-download-btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
+        }
+        @media (prefers-color-scheme: dark) {
+            .tm-dialog-overlay {
+                background: rgba(1, 4, 9, 0.68);
+            }
+            .tm-dialog {
+                border-color: #30363d;
+                background: #161b22;
+                color: #e6edf3;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            }
+            .tm-dialog-close {
+                color: #8b949e;
+            }
+            .tm-dialog-close:hover {
+                background: rgba(139, 148, 158, 0.2);
+                color: #e6edf3;
+            }
+            .tm-dialog-content {
+                color: #8b949e;
+            }
+            .tm-dialog-btn {
+                border-color: #30363d;
+                background: #21262d;
+                color: #e6edf3;
+            }
+            .tm-dialog-btn:hover {
+                background: #30363d;
+            }
+            .tm-dialog-btn.primary {
+                background: #238636;
+                border-color: rgba(240, 246, 252, 0.1);
+                color: #ffffff;
+            }
+            .tm-dialog-btn.primary:hover {
+                background: #2ea043;
+            }
         }
         `
     );
