@@ -351,7 +351,7 @@
         fixColumnWidths(table);
     }
 
-    // 在表格上方添加下载按钮
+    // 在表格上方添加下载工具栏(下载按钮与状态显示)
     function addDownloadButton(table) {
         if (!table) {
             logger.warn("ui", "未找到代码表格元素, 退出");
@@ -364,22 +364,31 @@
             return;
         }
 
-        let btn = document.querySelector('.tm-download-btn');
-        if (btn) {
-            logger.debug("ui", "下载按钮已存在, 退出");
+        const existingToolbar = document.querySelector('.tm-download-toolbar');
+        if (existingToolbar) {
+            logger.debug("ui", "下载工具栏已存在, 退出");
             return;
         }
 
-        btn = document.createElement('button');
+        const toolbar = document.createElement('div');
+        toolbar.className = 'tm-download-toolbar';
+        toolbar.style.marginBottom = '8px';
+
+        const btn = document.createElement('button');
         btn.className = 'tm-download-btn';
         btn.textContent = '下载所选文件';
-        btn.style.marginBottom = '8px';
         btn.disabled = false;
         btn.addEventListener('click', () => {
             startDownload();
         });
-        container.insertBefore(btn, table);
-        logger.debug("ui", "添加下载按钮");
+
+        const status = document.createElement('span');
+        status.className = 'tm-download-status is-empty';
+
+        toolbar.appendChild(btn);
+        toolbar.appendChild(status);
+        container.insertBefore(toolbar, table);
+        logger.debug("ui", "添加下载工具栏");
     }
 
     function fixColumnWidths(table) {
@@ -431,6 +440,7 @@
     async function startDownload() {
         const entries = getSelectionEntries();
         if (entries.length === 0) {
+            clearDownloadStatus();
             await showAlertDialog({
                 title: '提示',
                 message: '未选择任何文件！',
@@ -442,6 +452,7 @@
         setDownloadButtonState({ disabled: true, text: '下载中...' });
 
         try {
+            setDownloadStatus('解析下载计划...');
             const plan = await buildDownloadPlan(entries);
             if (plan.failedEntries.length > 0) {
                 let failedListTop5Msg =
@@ -455,6 +466,7 @@
                 }
 
                 if (plan.items.length === 0) {
+                    clearDownloadStatus();
                     await showAlertDialog({
                         title: '没有可下载的文件',
                         message: `所选条目全部解析失败，无法继续下载。\n${failedListTop5Msg}`,
@@ -470,11 +482,13 @@
                 });
 
                 if (!ok) {
+                    clearDownloadStatus();
                     return;
                 }
             }
 
             if (plan.items.length === 0) {
+                clearDownloadStatus();
                 await showAlertDialog({
                     title: '没有可下载的文件',
                     message: '没有有效的文件可下载！',
@@ -538,7 +552,6 @@
             // plan 中的 zipFilename: github_files_${Date.now()}.zip
             zipFilename: `_RETRY_${plan.zipFilename}`,
             failedEntries: [], // 重试计划只包含已解析成功但下载失败的文件项
-
         }
     }
 
@@ -550,13 +563,17 @@
      * @returns {Promise<DownloadExecutionResult>}
      */
     async function executeDownloadPlan(plan) {
-        const result = await fetchDownloadItems(plan.items);
+        const result = await fetchDownloadItems(plan.items, ({ completed, total }) => {
+            setDownloadStatus(`下载中 ${completed} / ${total}`);
+        });
 
         if (result.succeeded.length > 0) {
             let artifact;
             if (plan.outputMode === 'single') {
+                setDownloadStatus('保存中...');
                 artifact = buildSingleFileArtifact(result.succeeded[0]);
             } else if (plan.outputMode === 'zip') {
+                setDownloadStatus('打包中...');
                 artifact = buildZipArtifact(result.succeeded, plan.zipFilename);
             } else {
                 logger.error("download", `未知的输出模式: ${plan.outputMode}`);
@@ -564,6 +581,14 @@
             }
             saveBlob(artifact.blob, artifact.downloadName);
             logger.info("download", `下载完成，成功 ${result.succeeded.length} 个，失败 ${result.failed.length} 个`);
+        }
+
+        if (result.failed.length === 0) {
+            setTransientDownloadStatus('下载完成');
+        } else if (result.succeeded.length > 0) {
+            setTransientDownloadStatus(`部分完成，失败 ${result.failed.length} 个`);
+        } else {
+            setTransientDownloadStatus('下载失败');
         }
 
         return result;
@@ -698,10 +723,20 @@
         return { blob, downloadName: zipFilename };
     }
 
-    async function fetchDownloadItems(items) {
+    /**
+     * 并发下载文件列表，并在每个文件完成后上报进度。
+     *
+     * 无论单个文件成功还是失败，都会计入已完成数量。
+     *
+     * @param {DownloadItem[]} items
+     * @param {(progress: { completed: number, total: number, succeeded: number, failed: number }) => void} [onProgress]
+     * @returns {Promise<DownloadExecutionResult>}
+     */
+    async function fetchDownloadItems(items, onProgress) {
         const queue = [...items];
         const succeeded = [];
         const failed = [];
+        const total = items.length;
 
         async function worker() {
             while (queue.length > 0) {
@@ -723,6 +758,14 @@
                         error: err,
                     });
                     logger.error("network", `文件下载失败: ${item.rawUrl}`, err);
+                } finally {
+                    const completed = succeeded.length + failed.length;
+                    onProgress?.({
+                        completed,
+                        total,
+                        succeeded: succeeded.length,
+                        failed: failed.length,
+                    });
                 }
             }
         }
@@ -1217,6 +1260,7 @@
 
     let activeDialogResolver = null;
     let activeDialogOverlay = null;
+    let downloadStatusClearTimer = null;
 
     /**
      * 显示通用弹窗。
@@ -1534,6 +1578,49 @@
         return document.querySelector('.tm-download-btn');
     }
 
+    function getDownloadStatusElement() {
+        return document.querySelector('.tm-download-status');
+    }
+
+    function getDownloadToolbar() {
+        return document.querySelector('.tm-download-toolbar');
+    }
+
+    function setDownloadStatus(text) {
+        const status = getDownloadStatusElement();
+        const toolbar = getDownloadToolbar();
+        if (!status) {
+            return;
+        }
+
+        if (downloadStatusClearTimer) {
+            clearTimeout(downloadStatusClearTimer);
+            downloadStatusClearTimer = null;
+        }
+
+        status.textContent = text || '';
+        status.classList.toggle('is-empty', !text);
+        toolbar?.classList.toggle('has-status', Boolean(text));
+    }
+
+    function setTransientDownloadStatus(text, delayMs = 1500) {
+        setDownloadStatus(text);
+
+        downloadStatusClearTimer = setTimeout(() => {
+            downloadStatusClearTimer = null;
+            clearDownloadStatus();
+        }, delayMs);
+    }
+
+    function clearDownloadStatus() {
+        if (downloadStatusClearTimer) {
+            clearTimeout(downloadStatusClearTimer);
+            downloadStatusClearTimer = null;
+        }
+
+        setDownloadStatus('');
+    }
+
     function getCurrentRefButton() {
         return queryFirst(githubSelectors.refButtonCandidate);
     }
@@ -1671,6 +1758,63 @@
         .tm-dialog-btn.primary:hover {
             background: #1a7f37;
         }
+        .tm-download-toolbar {
+            display: inline-flex;
+            align-items: stretch;
+        }
+        .tm-download-btn {
+            appearance: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 32px;
+            padding: 0 14px;
+            border: 1px solid rgba(31, 35, 40, 0.15);
+            border-radius: 6px;
+            background: #f6f8fa;
+            color: #24292f;
+            font: inherit;
+            font-size: 14px;
+            font-weight: 500;
+            line-height: 1;
+            cursor: pointer;
+            box-shadow: 0 1px 0 rgba(27, 31, 36, 0.04);
+        }
+        .tm-download-btn:hover {
+            background: #f3f4f6;
+            border-color: rgba(31, 35, 40, 0.18);
+        }
+        .tm-download-btn:active {
+            background: #ebedf0;
+            transform: translateY(1px);
+        }
+        .tm-download-btn:disabled {
+            cursor: not-allowed;
+            background: #f6f8fa;
+            color: #57606a;
+            border-color: #d0d7de;
+        }
+        .tm-download-toolbar.has-status .tm-download-btn {
+            border-top-right-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+        .tm-download-status {
+            display: inline-flex;
+            align-items: center;
+            min-height: 32px;
+            padding: 0 10px;
+            border: 1px solid #d8dee4;
+            border-left: 0;
+            border-radius: 0 6px 6px 0;
+            background: rgba(246, 248, 250, 0.9);
+            color: #57606a;
+            font-size: 12px;
+            line-height: 1;
+            white-space: nowrap;
+        }
+        .tm-download-status.is-empty {
+            display: none;
+        }
         .tm-token-form {
             display: flex;
             flex-direction: column;
@@ -1757,10 +1901,6 @@
             margin: 0 !important;
             display: inline-block !important;
         }
-        button.tm-download-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
         @media (prefers-color-scheme: dark) {
             .tm-dialog-overlay {
                 background: rgba(1, 4, 9, 0.68);
@@ -1796,6 +1936,30 @@
             }
             .tm-dialog-btn.primary:hover {
                 background: #2ea043;
+            }
+            .tm-download-btn {
+                border-color: #30363d;
+                background: #21262d;
+                color: #e6edf3;
+                box-shadow: 0 1px 0 rgba(1, 4, 9, 0.24);
+            }
+            .tm-download-btn:hover {
+                background: #30363d;
+                border-color: #3d444d;
+            }
+            .tm-download-btn:active {
+                background: #262c36;
+            }
+            .tm-download-btn:disabled {
+                background: #21262d;
+                border-color: #30363d;
+                color: #8b949e;
+                opacity: 1;
+            }
+            .tm-download-status {
+                border-color: #30363d;
+                background: rgba(13, 17, 23, 0.9);
+                color: #8b949e;
             }
             .tm-token-input {
                 border-color: #30363d;
