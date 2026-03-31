@@ -10,6 +10,10 @@
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_registerMenuCommand
 // @connect      github.com
 // @connect      raw.githubusercontent.com
 // @connect      api.github.com
@@ -92,6 +96,11 @@
         // 调试
         LOG_LEVEL: 'info',
 
+        // GitHub API token，用于访问私有仓库的 API
+        // 此字段会被优先使用（仅调试时填入），如果留空则尝试从 Tampermonkey 持久化存储中读取
+        GITHUB_TOKEN_OVERRIDE: '',
+
+        GITHUB_TOKEN_STORED_KEY: 'github_token',
     };
 
     const LOG_LEVELS = {
@@ -207,6 +216,7 @@
     setTimeout(() => {
         apply();
         observeRootChanges();
+        registerMenuCommands();
     }, 1000);
 
     function apply() {
@@ -248,6 +258,12 @@
         window.addEventListener('popstate', schedule);
 
         schedule();
+    }
+
+    function registerMenuCommands() {
+        GM_registerMenuCommand('设置 GitHub Token', () => {
+            openGitHubTokenDialog();
+        });
     }
 
     function addCheckboxes(table) {
@@ -624,7 +640,7 @@
             throw new Error(`Tree API 返回异常: ${entry.githubPath}`);
         }
 
-        if(treeData.truncated) {
+        if (treeData.truncated) {
             throw new Error(`文件夹过大，无法展开: ${entry.githubPath}`);
         }
 
@@ -1128,9 +1144,11 @@
 
     /**
      * @param {string} url
+     * @param {{ headers?: Record<string, string> }} [options]
      * @returns {Promise<any>}
      */
-    function gmFetchJson(url) {
+    function gmFetchJson(url, options = {}) {
+        const headers = options.headers || {};
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: "GET",
@@ -1139,10 +1157,7 @@
                 timeout: SETTINGS.REQUEST_TIMEOUT_MS,
                 anonymous: false,
                 withCredentials: true,
-                headers: {
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
+                headers,
                 onload: (res) => {
                     if (res.status >= 200 && res.status < 300) {
                         resolve(res.response);
@@ -1156,8 +1171,25 @@
         });
     }
 
+
+    // 为 GitHub REST API 请求构建认证头，私有仓库场景会附带 token
+    function buildGitHubApiHeaders() {
+        const headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        };
+
+        const token = getGitHubToken();
+        if (token) {
+            headers["Authorization"] = `Bearer ${token}`;
+        }
+        return headers;
+    }
+
     /**
-     * 获取当前 ref 下的完整 Git tree。
+     * 获取当前 ref 下的完整 Git tree
+     * 
+     * 请求头由 buildGitHubApiHeaders() 统一构建，支持私有仓库 API 访问
      *
      * @param {GitHubEntryContext} ctx
      * @returns {Promise<any>}
@@ -1166,7 +1198,7 @@
         const treeRef = encodeURIComponent(ctx.ref);
         const url = `https://api.github.com/repos/${ctx.owner}/${ctx.repo}/git/trees/${treeRef}?recursive=1`;
 
-        return await gmFetchJson(url);
+        return await gmFetchJson(url, { headers: buildGitHubApiHeaders() });
     }
 
 
@@ -1296,6 +1328,132 @@
         });
     }
 
+    function openGitHubTokenDialog() {
+        closeActiveDialog(false);
+
+        const storedToken = GM_getValue(SETTINGS.GITHUB_TOKEN_STORED_KEY, '');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'tm-dialog-overlay';
+        overlay.setAttribute('aria-hidden', 'false');
+
+        const dialog = document.createElement('div');
+        dialog.className = 'tm-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+
+        const header = document.createElement('div');
+        header.className = 'tm-dialog-header';
+
+        const titleEl = document.createElement('h2');
+        titleEl.className = 'tm-dialog-title';
+        titleEl.textContent = 'GitHub Token 设置';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'tm-dialog-close';
+        closeBtn.setAttribute('aria-label', '关闭弹窗');
+        closeBtn.textContent = '×';
+
+        const content = document.createElement('div');
+        content.className = 'tm-dialog-content';
+
+        const form = document.createElement('div');
+        form.className = 'tm-token-form';
+
+        const field = document.createElement('div');
+        field.className = 'tm-token-field';
+
+        const inputWrap = document.createElement('div');
+        inputWrap.className = 'tm-token-input-wrap';
+
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.className = 'tm-token-input';
+        input.value = storedToken || '';
+        input.placeholder = 'ghp_xxx 或 github_pat_xxx';
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'tm-token-toggle';
+        toggleBtn.textContent = '显示';
+
+        const captionRow = document.createElement('div');
+        captionRow.className = 'tm-token-caption-row';
+
+        const caption = document.createElement('p');
+        caption.className = 'tm-token-caption';
+        caption.textContent = '留空后点击保存，将清空已保存的 token。';
+
+        captionRow.appendChild(caption);
+
+        inputWrap.appendChild(input);
+        inputWrap.appendChild(toggleBtn);
+        field.appendChild(inputWrap);
+        field.appendChild(captionRow);
+        form.appendChild(field);
+        content.appendChild(form);
+
+        const footer = document.createElement('div');
+        footer.className = 'tm-dialog-footer';
+
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                closeTokenDialog();
+            }
+        };
+
+        const closeTokenDialog = () => {
+            document.removeEventListener('keydown', onKeyDown);
+            closeActiveDialog(false);
+        };
+
+        const cancelBtn = createDialogButton('取消', '', () => closeTokenDialog());
+        const saveBtn = createDialogButton('保存', 'primary', () => {
+            const value = input.value.trim();
+
+            if (value) {
+                setGitHubToken(value);
+                closeTokenDialog();
+                return;
+            }
+
+            clearGitHubToken();
+            closeTokenDialog();
+        });
+
+        closeBtn.addEventListener('click', closeTokenDialog);
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) {
+                closeTokenDialog();
+            }
+        });
+
+        toggleBtn.addEventListener('click', () => {
+            const nextType = input.type === 'password' ? 'text' : 'password';
+            input.type = nextType;
+            toggleBtn.textContent = nextType === 'password' ? '显示' : '隐藏';
+        });
+
+        footer.appendChild(cancelBtn);
+        footer.appendChild(saveBtn);
+
+        header.appendChild(titleEl);
+        header.appendChild(closeBtn);
+        dialog.appendChild(header);
+        dialog.appendChild(content);
+        dialog.appendChild(footer);
+        overlay.appendChild(dialog);
+
+        document.body.appendChild(overlay);
+        document.addEventListener('keydown', onKeyDown);
+        activeDialogOverlay = overlay;
+        activeDialogResolver = null;
+        overlay.classList.add('is-open');
+    }
+
     /**
      * @param {string} text
      * @param {string} extraClass
@@ -1328,6 +1486,8 @@
             resolver(result);
         }
     }
+
+    // 通用工具函数
 
     // 尝试多个选择器，返回第一个匹配的元素，无法匹配时返回 null
     function queryFirst(selectors, root = document) {
@@ -1404,6 +1564,17 @@
         return null;
     }
 
+    function getGitHubToken(defaultValue = '') {
+        return SETTINGS.GITHUB_TOKEN_OVERRIDE || GM_getValue(SETTINGS.GITHUB_TOKEN_STORED_KEY, defaultValue);
+    }
+
+    function setGitHubToken(token) {
+        GM_setValue(SETTINGS.GITHUB_TOKEN_STORED_KEY, token);
+    }
+
+    function clearGitHubToken() {
+        GM_deleteValue(SETTINGS.GITHUB_TOKEN_STORED_KEY);
+    }
 
     GM_addStyle(`
         .tm-dialog-overlay {
@@ -1500,6 +1671,64 @@
         .tm-dialog-btn.primary:hover {
             background: #1a7f37;
         }
+        .tm-token-form {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .tm-token-field {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .tm-token-input-wrap {
+            position: relative;
+        }
+        .tm-token-input {
+            width: 100%;
+            min-height: 40px;
+            padding: 10px 56px 10px 12px;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            background: #ffffff;
+            color: #24292f;
+            font: inherit;
+        }
+        .tm-token-input:focus {
+            outline: none;
+            border-color: #0969da;
+            box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
+        }
+        .tm-token-toggle {
+            position: absolute;
+            top: 50%;
+            right: 8px;
+            transform: translateY(-50%);
+            min-width: 40px;
+            padding: 4px 8px;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: #57606a;
+            font: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .tm-token-toggle:hover {
+            background: rgba(175, 184, 193, 0.18);
+            color: #24292f;
+        }
+        .tm-token-caption-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .tm-token-caption {
+            margin: 0;
+            font-size: 12px;
+            color: #656d76;
+        }
         th.tm-left-cell {
             box-sizing: border-box !important;
             width: 32px !important;
@@ -1567,6 +1796,25 @@
             }
             .tm-dialog-btn.primary:hover {
                 background: #2ea043;
+            }
+            .tm-token-input {
+                border-color: #30363d;
+                background: #0d1117;
+                color: #e6edf3;
+            }
+            .tm-token-input:focus {
+                border-color: #1f6feb;
+                box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.22);
+            }
+            .tm-token-toggle {
+                color: #8b949e;
+            }
+            .tm-token-toggle:hover {
+                background: rgba(110, 118, 129, 0.16);
+                color: #e6edf3;
+            }
+            .tm-token-caption {
+                color: #8b949e;
             }
         }
         `
