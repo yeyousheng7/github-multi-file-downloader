@@ -226,6 +226,13 @@
             currentPageKey = pageKey;
         }
 
+        // ref 按钮在仓库页面稳定存在，用它作为标志位避免在非仓库页面错误注入
+        const refButton = getCurrentRefButton();
+        if (!refButton) {
+            logger.debug("ui", "当前页面不存在 ref 选择按钮，跳过注入");
+            return;
+        }
+
         const table = findRepositoryFileTable();
         if (!table) {
             logger.warn("ui", "未找到代码表格元素, 退出");
