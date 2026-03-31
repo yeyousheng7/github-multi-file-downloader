@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Github Downloader
 // @namespace    http://tampermonkey.net/
-// @version      0.1.0
+// @version      1.0.0
 // @description  在 Github 仓库页面添加多文件下载按钮, 方便下载。
 // @author       yys
 // @match        https://github.com/*
@@ -217,7 +217,7 @@
         apply();
         observeRootChanges();
         registerMenuCommands();
-    }, 1000);
+    }, 200);
 
     function apply() {
         const pageKey = getPageKey();

@@ -13,7 +13,7 @@
 说明：
 
 - 这个脚本**不会加速** GitHub 下载，只是批量下载整理工具
-- 私人仓库文件夹下载需要配置 GitHub Token
+- 私有仓库文件夹下载需要配置 GitHub Token，你可以在 Tampermonkey 的脚本菜单中配置；建议参考 GitHub 官方文档创建 [fine-grained personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)，并为目标仓库授予 `Contents: Read` 权限
 
 基本用法：
 
