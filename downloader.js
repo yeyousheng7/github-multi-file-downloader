@@ -1,11 +1,15 @@
 // ==UserScript==
-// @name         Github Downloader
+// @name         Github Multi-File Downloader
+// @name:zh-CN   Github 批量下载器
 // @namespace    http://tampermonkey.net/
 // @version      1.0.0
-// @description  在 Github 仓库页面添加多文件下载按钮, 方便下载。
-// @author       yys
-// @match        https://github.com/*
+// @description:zh-CN  在 Github 仓库页面添加多文件下载按钮, 方便下载。
+// @homepageURL  https://github.com/yeyousheng7/github-downloader
+// @supportURL   https://github.com/yeyousheng7/github-downloader/issues
+// @author       yyyyys
+// @license      MIT
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
+// @match        https://github.com/*
 // @require      https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
 // @grant        GM_addStyle
@@ -565,7 +569,7 @@
     /**
      * 执行下载计划，并在存在成功文件时立即保存结果。
      * 此函数不涉及用户交互
-     * 
+     *
      * @param {DownloadPlan} plan
      * @returns {Promise<DownloadExecutionResult>}
      */
@@ -874,7 +878,7 @@
 
     /**
      * 从表格行中解析选中项
-     * 
+     *
      * @param {HTMLElement} rowElement
      * @returns {SelectionEntry|null}
      */
@@ -1097,12 +1101,12 @@
 
     /**
      * 将 GitHub blob path 转换为 raw URL，在无法转化时，返回 null。
-     * 
+     *
      * 例如:
      * - 输入: "/owner/repo/blob/ref/path/to/file"
      * - 输出: "https://github.com/owner/repo/raw/ref/path/to/file"
-     * 
-     * @param {string} filePath 
+     *
+     * @param {string} filePath
      * @returns {string|null}
      */
     function blobToGithubRawUrl(filePath) {
@@ -1238,7 +1242,7 @@
 
     /**
      * 获取当前 ref 下的完整 Git tree
-     * 
+     *
      * 请求头由 buildGitHubApiHeaders() 统一构建，支持私有仓库 API 访问
      *
      * @param {GitHubEntryContext} ctx
@@ -1885,23 +1889,23 @@
             width: 32px !important;
             min-width: 32px !important;
             max-width: 32px !important;
-            
+
             vertical-align: middle !important;
             padding: 0 !important;
             text-align: center !important;
-            
+
         }
         td.tm-left-cell {
             box-sizing: border-box !important;
-            
+
             width: 32px !important;
             min-width: 32px !important;
             max-width: 32px !important;
-            
+
             vertical-align: middle !important;
             padding: 4px 0 0 0 !important;
             text-align: center !important;
-            
+
             background: inherit !important;
         }
         input.tm-left-cb {
