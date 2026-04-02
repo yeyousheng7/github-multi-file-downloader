@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         Github Multi-File Downloader
-// @name:zh-CN   Github 批量下载器
+// @name         GitHub Multi-File Downloader
+// @name:zh-CN   GitHub 批量下载器
 // @namespace    http://tampermonkey.net/
 // @version      1.0.0
-// @description:zh-CN  在 Github 仓库页面添加多文件下载按钮, 方便下载。
-// @homepageURL  https://github.com/yeyousheng7/github-downloader
-// @supportURL   https://github.com/yeyousheng7/github-downloader/issues
+// @description:zh-CN  在 GitHub 仓库页面添加多文件下载按钮, 方便下载。
+// @homepageURL  https://github.com/yeyousheng7/github-multi-file-downloader
+// @supportURL   https://github.com/yeyousheng7/github-multi-file-downloader/issues
 // @author       yyyyys
 // @license      MIT
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
@@ -32,8 +32,8 @@
 
     let currentPageKey = null; // 当前页面唯一标识, 用于检测页面变化
 
-    // Github 页面元素属性
-    const githubAtrribute = {
+    // GitHub 页面元素属性
+    const githubAttribute = {
         // 页面根级元素 ID
         githubRootId: "repo-content-pjax-container",
 
@@ -45,7 +45,7 @@
         // 文件表格本体
         // 主策略依赖“table 内含文件/目录条目链接”来判定是否命中，
         // 因此这里可以接受较宽的候选；
-        // 后面的 module class 仅作为备选，Github 可能随时调整样式导致其失效
+        // 后面的 module class 仅作为备选，GitHub 可能随时调整样式导致其失效
         tableCandidate: [
             'table',
             '.Table-module__Box__HZKiQ',
@@ -123,7 +123,7 @@
         },
 
         format(scope, message) {
-            const prefix = scope ? `[Github Downloader][${scope}]` : "[Github Downloader]";
+            const prefix = scope ? `[GitHub Downloader][${scope}]` : "[GitHub Downloader]";
             return `${prefix} ${message}`;
         },
 
@@ -215,7 +215,7 @@
      * @property {boolean} [confirmOnly]
      */
 
-    logger.info("app", "Github Downloader 脚本启动");
+    logger.info("app", "GitHub Downloader 脚本启动");
 
     setTimeout(() => {
         apply();
@@ -244,12 +244,12 @@
         }
         ensureHeader(table);
         addCheckboxes(table);
-        addDownloadButton(table);
+        addDownloadToolbar(table);
         bindTableEvents(table);
     }
 
     function observeRootChanges() {
-        const root = document.getElementById(githubAtrribute.githubRootId);
+        const root = document.getElementById(githubAttribute.githubRootId);
         if (!root) {
             logger.warn("app", "未找到页面根级元素, 退出");
             return;
@@ -300,7 +300,7 @@
 
         for (let i = 0; i < fileRows.length; i++) {
             const row = fileRows[i];
-            const rowId = githubAtrribute.githubFileRowIdPrefix + (i + 1);
+            const rowId = githubAttribute.githubFileRowIdPrefix + (i + 1);
 
             addCheckboxToRow(row, rowId);
             logger.debug("ui", `在行 ${rowId} 添加复选框`);
@@ -363,7 +363,7 @@
     }
 
     // 在表格上方添加下载工具栏(下载按钮与状态显示)
-    function addDownloadButton(table) {
+    function addDownloadToolbar(table) {
         if (!table) {
             logger.warn("ui", "未找到代码表格元素, 退出");
             return;

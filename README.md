@@ -1,4 +1,4 @@
-# Github Multi-File Downloader
+# GitHub Multi-File Downloader
 
 一个用于 GitHub 仓库页面的 Tampermonkey 脚本。
 
