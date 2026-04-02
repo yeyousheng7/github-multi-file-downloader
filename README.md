@@ -23,4 +23,4 @@
 
 效果：
 
-![example](assets/image/README/example.png)
+![example](assets/images/README/example.png)
