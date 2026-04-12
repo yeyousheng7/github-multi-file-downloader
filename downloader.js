@@ -2,7 +2,7 @@
 // @name         GitHub Multi-File Downloader
 // @name:zh-CN   GitHub 批量下载器
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.1.0
 // @description:zh-CN  在 GitHub 仓库页面添加多文件下载按钮, 方便下载。
 // @homepageURL  https://github.com/yeyousheng7/github-multi-file-downloader
 // @supportURL   https://github.com/yeyousheng7/github-multi-file-downloader/issues
@@ -12,6 +12,7 @@
 // @match        https://github.com/*
 // @require      https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
+// @require      https://cdn.bootcdn.net/ajax/libs/sweetalert2/11.23.0/sweetalert2.all.min.js
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -210,9 +211,9 @@
      * @typedef {Object} DialogOptions
      * @property {string} title
      * @property {string} message
+     * @property {string[]} [lines]
      * @property {string} [confirmText]
      * @property {string} [cancelText]
-     * @property {boolean} [confirmOnly]
      */
 
     logger.info("app", "GitHub Downloader 脚本启动");
@@ -466,28 +467,29 @@
             setDownloadStatus('解析下载计划...');
             const plan = await buildDownloadPlan(entries);
             if (plan.failedEntries.length > 0) {
-                let failedListTop5Msg =
+                const failedListTop5Lines =
                     plan.failedEntries
                         .slice(0, 5)
-                        .map(entry => entry.repoPath || entry.githubPath)
-                        .join('\n');
+                        .map(entry => entry.repoPath || entry.githubPath);
 
                 if (plan.failedEntries.length > 5) {
-                    failedListTop5Msg += '\n...';
+                    failedListTop5Lines.push('...');
                 }
 
                 if (plan.items.length === 0) {
                     clearDownloadStatus();
                     await showAlertDialog({
                         title: '没有可下载的文件',
-                        message: `所选条目全部解析失败，无法继续下载。\n${failedListTop5Msg}`,
+                        message: '所选条目全部解析失败，无法继续下载。',
+                        lines: failedListTop5Lines,
                     });
                     return;
                 }
 
                 const ok = await showConfirmDialog({
                     title: '继续下载其余成功项？',
-                    message: `有 ${plan.failedEntries.length} 个条目解析失败，是否继续下载其余成功项？\n${failedListTop5Msg}`,
+                    message: `有 ${plan.failedEntries.length} 个条目解析失败，是否继续下载其余成功项？`,
+                    lines: failedListTop5Lines,
                     confirmText: '继续下载',
                     cancelText: '取消',
                 });
@@ -804,7 +806,8 @@
 
         return await showConfirmDialog({
             title: '是否重试失败文件？',
-            message: `${title}\n是否重试失败文件？\n${buildFailedItemsMessage(result.failed)}`,
+            message: `${title} 是否重试失败文件？`,
+            lines: buildFailedItemsLines(result.failed),
             confirmText: '重试',
             cancelText: '取消',
         });
@@ -826,7 +829,8 @@
 
         await showAlertDialog({
             title,
-            message: `${messagePrefix}\n失败文件列表:\n${buildFailedItemsMessage(result.failed)}`,
+            message: `${messagePrefix} 失败文件列表:`,
+            lines: buildFailedItemsLines(result.failed),
             confirmText: '知道了',
         });
     }
@@ -834,15 +838,18 @@
 
     /**
      * @param {Array<{ item: DownloadItem, error: Error }>} failedItems
-     * @returns {string}
+     * @returns {string[]}
      */
-    function buildFailedItemsMessage(failedItems) {
-        const failedMsg = failedItems
+    function buildFailedItemsLines(failedItems) {
+        const lines = failedItems
             .slice(0, 5)
-            .map(f => f.item.outputPath)
-            .join('\n');
+            .map(f => f.item.outputPath);
 
-        return failedItems.length > 5 ? `${failedMsg}\n...` : failedMsg;
+        if (failedItems.length > 5) {
+            lines.push('...');
+        }
+
+        return lines;
     }
 
     /**
@@ -1269,277 +1276,115 @@
         saveAs(blob, downloadName);
     }
 
-    let activeDialogResolver = null;
-    let activeDialogOverlay = null;
     let downloadStatusClearTimer = null;
 
-    /**
-     * 显示通用弹窗。
-     *
-     * @param {DialogOptions} options
-     * @returns {Promise<boolean>}
-     */
-    function showDialog(options) {
-        const {
-            title,
-            message,
-            confirmText = '确定',
-            cancelText = '取消',
-            confirmOnly = false,
-        } = options;
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
 
-        closeActiveDialog(false);
+    function buildDialogHtml(message, lines = []) {
+        const hasLines = Array.isArray(lines) && lines.length > 0;
+        const parts = [];
 
-        const overlay = document.createElement('div');
-        overlay.className = 'tm-dialog-overlay';
-        overlay.setAttribute('aria-hidden', 'false');
-
-        const dialog = document.createElement('div');
-        dialog.className = 'tm-dialog';
-        dialog.setAttribute('role', 'dialog');
-        dialog.setAttribute('aria-modal', 'true');
-
-        const header = document.createElement('div');
-        header.className = 'tm-dialog-header';
-
-        const titleEl = document.createElement('h2');
-        titleEl.className = 'tm-dialog-title';
-        titleEl.textContent = title;
-
-        const closeBtn = document.createElement('button');
-        closeBtn.type = 'button';
-        closeBtn.className = 'tm-dialog-close';
-        closeBtn.setAttribute('aria-label', '关闭弹窗');
-        closeBtn.textContent = '×';
-
-        const content = document.createElement('div');
-        content.className = 'tm-dialog-content';
-        content.textContent = message;
-
-        const footer = document.createElement('div');
-        footer.className = 'tm-dialog-footer';
-
-        closeBtn.addEventListener('click', () => closeActiveDialog(false));
-
-        if (!confirmOnly) {
-            footer.appendChild(createDialogButton(cancelText, '', () => closeActiveDialog(false)));
+        if (message) {
+            parts.push(`<div class="tm-dialog-message">${escapeHtml(message)}</div>`);
         }
-        footer.appendChild(createDialogButton(confirmText, 'primary', () => closeActiveDialog(true)));
 
-        header.appendChild(titleEl);
-        header.appendChild(closeBtn);
-        dialog.appendChild(header);
-        dialog.appendChild(content);
-        dialog.appendChild(footer);
-        overlay.appendChild(dialog);
+        if (hasLines) {
+            const renderedLines = lines
+                .map(line => `<li class="tm-dialog-line">${escapeHtml(line)}</li>`)
+                .join('');
 
-        overlay.addEventListener('click', (event) => {
-            if (event.target === overlay) {
-                closeActiveDialog(false);
-            }
-        });
+            parts.push(`<ul class="tm-dialog-lines">${renderedLines}</ul>`);
 
-        const onKeyDown = (event) => {
-            if (event.key === 'Escape') {
-                closeActiveDialog(false);
-            }
-        };
+            return `<div class="tm-dialog-body tm-dialog-body-with-lines">${parts.join('')}</div>`;
+        }
 
-        document.body.appendChild(overlay);
-        document.addEventListener('keydown', onKeyDown);
-        activeDialogOverlay = overlay;
-        overlay.classList.add('is-open');
-
-        return new Promise((resolve) => {
-            activeDialogResolver = (result) => {
-                document.removeEventListener('keydown', onKeyDown);
-                resolve(result);
-            };
-        });
+        return parts.join('');
     }
 
     /**
-     * @param {{ title: string, message: string, confirmText?: string }} options
+     * @param {{ title: string, message: string, lines?: string[], confirmText?: string }} options
      * @returns {Promise<boolean>}
      */
-    function showAlertDialog(options) {
-        return showDialog({
-            ...options,
-            confirmOnly: true,
-            confirmText: options.confirmText || '确定',
+    async function showAlertDialog(options) {
+        await Swal.fire({
+            title: options.title,
+            html: buildDialogHtml(options.message, options.lines),
+            confirmButtonText: options.confirmText || '确定',
+            theme: 'auto',
+            allowOutsideClick: true,
+            allowEscapeKey: true,
+            heightAuto: false,
         });
+
+        return true;
     }
 
     /**
-     * @param {{ title: string, message: string, confirmText?: string, cancelText?: string }} options
+     * @param {{ title: string, message: string, lines?: string[], confirmText?: string, cancelText?: string }} options
      * @returns {Promise<boolean>}
      */
-    function showConfirmDialog(options) {
-        return showDialog({
-            ...options,
-            confirmOnly: false,
-            confirmText: options.confirmText || '继续',
-            cancelText: options.cancelText || '取消',
+    async function showConfirmDialog(options) {
+        const result = await Swal.fire({
+            title: options.title,
+            html: buildDialogHtml(options.message, options.lines),
+            confirmButtonText: options.confirmText || '继续',
+            cancelButtonText: options.cancelText || '取消',
+            theme: 'auto',
+            showCancelButton: true,
+            reverseButtons: true,
+            allowOutsideClick: true,
+            allowEscapeKey: true,
+            heightAuto: false,
         });
+
+        return result.isConfirmed;
     }
 
     function openGitHubTokenDialog() {
-        closeActiveDialog(false);
-
         const storedToken = GM_getValue(SETTINGS.GITHUB_TOKEN_STORED_KEY, '');
 
-        const overlay = document.createElement('div');
-        overlay.className = 'tm-dialog-overlay';
-        overlay.setAttribute('aria-hidden', 'false');
-
-        const dialog = document.createElement('div');
-        dialog.className = 'tm-dialog';
-        dialog.setAttribute('role', 'dialog');
-        dialog.setAttribute('aria-modal', 'true');
-
-        const header = document.createElement('div');
-        header.className = 'tm-dialog-header';
-
-        const titleEl = document.createElement('h2');
-        titleEl.className = 'tm-dialog-title';
-        titleEl.textContent = 'GitHub Token 设置';
-
-        const closeBtn = document.createElement('button');
-        closeBtn.type = 'button';
-        closeBtn.className = 'tm-dialog-close';
-        closeBtn.setAttribute('aria-label', '关闭弹窗');
-        closeBtn.textContent = '×';
-
-        const content = document.createElement('div');
-        content.className = 'tm-dialog-content';
-
-        const form = document.createElement('div');
-        form.className = 'tm-token-form';
-
-        const field = document.createElement('div');
-        field.className = 'tm-token-field';
-
-        const inputWrap = document.createElement('div');
-        inputWrap.className = 'tm-token-input-wrap';
-
-        const input = document.createElement('input');
-        input.type = 'password';
-        input.className = 'tm-token-input';
-        input.value = storedToken || '';
-        input.placeholder = 'ghp_xxx 或 github_pat_xxx';
-        input.autocomplete = 'off';
-        input.spellcheck = false;
-
-        const toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.className = 'tm-token-toggle';
-        toggleBtn.textContent = '显示';
-
-        const captionRow = document.createElement('div');
-        captionRow.className = 'tm-token-caption-row';
-
-        const caption = document.createElement('p');
-        caption.className = 'tm-token-caption';
-        caption.textContent = '留空后点击保存，将清空已保存的 token。';
-
-        captionRow.appendChild(caption);
-
-        inputWrap.appendChild(input);
-        inputWrap.appendChild(toggleBtn);
-        field.appendChild(inputWrap);
-        field.appendChild(captionRow);
-        form.appendChild(field);
-        content.appendChild(form);
-
-        const footer = document.createElement('div');
-        footer.className = 'tm-dialog-footer';
-
-        const onKeyDown = (event) => {
-            if (event.key === 'Escape') {
-                closeTokenDialog();
-            }
-        };
-
-        const closeTokenDialog = () => {
-            document.removeEventListener('keydown', onKeyDown);
-            closeActiveDialog(false);
-        };
-
-        const cancelBtn = createDialogButton('取消', '', () => closeTokenDialog());
-        const saveBtn = createDialogButton('保存', 'primary', () => {
-            const value = input.value.trim();
-
-            if (value) {
-                setGitHubToken(value);
-                closeTokenDialog();
+        return Swal.fire({
+            title: 'GitHub Token 设置',
+            text: '留空后点击保存，将清空已保存的 token。',
+            input: 'password',
+            inputValue: storedToken || '',
+            inputPlaceholder: 'ghp_xxx 或 github_pat_xxx',
+            inputAttributes: {
+                autocomplete: 'off',
+                spellcheck: 'false',
+            },
+            confirmButtonText: '保存',
+            cancelButtonText: '取消',
+            theme: 'auto',
+            showCancelButton: true,
+            reverseButtons: true,
+            focusConfirm: false,
+            allowOutsideClick: false,
+            allowEscapeKey: true,
+            heightAuto: false,
+            preConfirm: () => {
+                const input = Swal.getInput();
+                return input instanceof HTMLInputElement ? input.value.trim() : '';
+            },
+        }).then((result) => {
+            if (!result.isConfirmed) {
                 return;
             }
 
-            clearGitHubToken();
-            closeTokenDialog();
-        });
-
-        closeBtn.addEventListener('click', closeTokenDialog);
-        overlay.addEventListener('click', (event) => {
-            if (event.target === overlay) {
-                closeTokenDialog();
+            const value = typeof result.value === 'string' ? result.value : '';
+            if (value) {
+                setGitHubToken(value);
+            } else {
+                clearGitHubToken();
             }
         });
-
-        toggleBtn.addEventListener('click', () => {
-            const nextType = input.type === 'password' ? 'text' : 'password';
-            input.type = nextType;
-            toggleBtn.textContent = nextType === 'password' ? '显示' : '隐藏';
-        });
-
-        footer.appendChild(cancelBtn);
-        footer.appendChild(saveBtn);
-
-        header.appendChild(titleEl);
-        header.appendChild(closeBtn);
-        dialog.appendChild(header);
-        dialog.appendChild(content);
-        dialog.appendChild(footer);
-        overlay.appendChild(dialog);
-
-        document.body.appendChild(overlay);
-        document.addEventListener('keydown', onKeyDown);
-        activeDialogOverlay = overlay;
-        activeDialogResolver = null;
-        overlay.classList.add('is-open');
-    }
-
-    /**
-     * @param {string} text
-     * @param {string} extraClass
-     * @param {() => void} onClick
-     * @returns {HTMLButtonElement}
-     */
-    function createDialogButton(text, extraClass, onClick) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = `tm-dialog-btn ${extraClass}`.trim();
-        button.textContent = text;
-        button.addEventListener('click', onClick);
-        return button;
-    }
-
-    /**
-     * 关闭当前活动弹窗，并返回结果。
-     *
-     * @param {boolean} result
-     */
-    function closeActiveDialog(result) {
-        if (activeDialogOverlay) {
-            activeDialogOverlay.remove();
-            activeDialogOverlay = null;
-        }
-
-        if (activeDialogResolver) {
-            const resolver = activeDialogResolver;
-            activeDialogResolver = null;
-            resolver(result);
-        }
     }
 
     // 通用工具函数
@@ -1675,100 +1520,6 @@
     }
 
     GM_addStyle(`
-        .tm-dialog-overlay {
-            position: fixed;
-            inset: 0;
-            z-index: 99999;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 24px;
-            background: rgba(27, 31, 36, 0.5);
-        }
-        .tm-dialog-overlay.is-open {
-            display: flex;
-        }
-        .tm-dialog {
-            width: min(560px, calc(100vw - 32px));
-            max-height: min(78vh, 760px);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            border: 1px solid #d0d7de;
-            border-radius: 8px;
-            background: #ffffff;
-            color: #24292f;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-        .tm-dialog-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 24px 24px 8px 24px;
-        }
-        .tm-dialog-title {
-            margin: 0;
-            font-size: 16px;
-            font-weight: 600;
-            line-height: 1.4;
-        }
-        .tm-dialog-close {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 28px;
-            height: 28px;
-            padding: 0;
-            border: 0;
-            border-radius: 6px;
-            background: transparent;
-            color: #57606a;
-            font-size: 24px;
-            line-height: 1;
-            cursor: pointer;
-        }
-        .tm-dialog-close:hover {
-            background: rgba(175, 184, 193, 0.2);
-            color: #24292f;
-        }
-        .tm-dialog-content {
-            padding: 12px 24px 24px 24px;
-            max-height: 44vh;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            line-height: 1.6;
-            color: #57606a;
-            background: inherit;
-        }
-        .tm-dialog-footer {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            padding: 0 24px 24px 24px;
-        }
-        .tm-dialog-btn {
-            appearance: none;
-            border-radius: 6px;
-            border: 1px solid #d0d7de;
-            background: #f6f8fa;
-            color: #24292f;
-            font: inherit;
-            font-weight: 500;
-            padding: 8px 16px;
-            cursor: pointer;
-        }
-        .tm-dialog-btn:hover {
-            background: #eef2f6;
-        }
-        .tm-dialog-btn.primary {
-            background: #1f883d;
-            border-color: rgba(27, 31, 36, 0.15);
-            color: #ffffff;
-        }
-        .tm-dialog-btn.primary:hover {
-            background: #1a7f37;
-        }
         .tm-download-toolbar {
             display: inline-flex;
             align-items: stretch;
@@ -1826,63 +1577,21 @@
         .tm-download-status.is-empty {
             display: none;
         }
-        .tm-token-form {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
+        .tm-dialog-body-with-lines {
+            text-align: left;
         }
-        .tm-token-field {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+        .tm-dialog-message {
+            white-space: pre-wrap;
         }
-        .tm-token-input-wrap {
-            position: relative;
+        .tm-dialog-lines {
+            margin-top: 16px;
+            padding-left: 20px;
+            list-style: disc;
         }
-        .tm-token-input {
-            width: 100%;
-            min-height: 40px;
-            padding: 10px 56px 10px 12px;
-            border: 1px solid #d0d7de;
-            border-radius: 6px;
-            background: #ffffff;
-            color: #24292f;
-            font: inherit;
-        }
-        .tm-token-input:focus {
-            outline: none;
-            border-color: #0969da;
-            box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
-        }
-        .tm-token-toggle {
-            position: absolute;
-            top: 50%;
-            right: 8px;
-            transform: translateY(-50%);
-            min-width: 40px;
-            padding: 4px 8px;
-            border: 0;
-            border-radius: 6px;
-            background: transparent;
-            color: #57606a;
-            font: inherit;
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-        .tm-token-toggle:hover {
-            background: rgba(175, 184, 193, 0.18);
-            color: #24292f;
-        }
-        .tm-token-caption-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .tm-token-caption {
-            margin: 0;
-            font-size: 12px;
-            color: #656d76;
+        .tm-dialog-line {
+            word-break: break-word;
+            overflow-wrap: anywhere;
+            list-style: inherit;
         }
         th.tm-left-cell {
             box-sizing: border-box !important;
@@ -1913,41 +1622,6 @@
             display: inline-block !important;
         }
         @media (prefers-color-scheme: dark) {
-            .tm-dialog-overlay {
-                background: rgba(1, 4, 9, 0.68);
-            }
-            .tm-dialog {
-                border-color: #30363d;
-                background: #161b22;
-                color: #e6edf3;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-            }
-            .tm-dialog-close {
-                color: #8b949e;
-            }
-            .tm-dialog-close:hover {
-                background: rgba(139, 148, 158, 0.2);
-                color: #e6edf3;
-            }
-            .tm-dialog-content {
-                color: #8b949e;
-            }
-            .tm-dialog-btn {
-                border-color: #30363d;
-                background: #21262d;
-                color: #e6edf3;
-            }
-            .tm-dialog-btn:hover {
-                background: #30363d;
-            }
-            .tm-dialog-btn.primary {
-                background: #238636;
-                border-color: rgba(240, 246, 252, 0.1);
-                color: #ffffff;
-            }
-            .tm-dialog-btn.primary:hover {
-                background: #2ea043;
-            }
             .tm-download-btn {
                 border-color: #30363d;
                 background: #21262d;
@@ -1970,25 +1644,6 @@
             .tm-download-status {
                 border-color: #30363d;
                 background: rgba(13, 17, 23, 0.9);
-                color: #8b949e;
-            }
-            .tm-token-input {
-                border-color: #30363d;
-                background: #0d1117;
-                color: #e6edf3;
-            }
-            .tm-token-input:focus {
-                border-color: #1f6feb;
-                box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.22);
-            }
-            .tm-token-toggle {
-                color: #8b949e;
-            }
-            .tm-token-toggle:hover {
-                background: rgba(110, 118, 129, 0.16);
-                color: #e6edf3;
-            }
-            .tm-token-caption {
                 color: #8b949e;
             }
         }
