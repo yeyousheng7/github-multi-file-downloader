@@ -1,9 +1,10 @@
 // ==UserScript==
-// @name         GitHub Multi-File Downloader
-// @name:zh-CN   GitHub 批量下载器
-// @namespace    http://tampermonkey.net/
+// @name         GitHub 批量下载器
+// @name:en      GitHub Multi-File Downloader
+// @namespace    https://github.com/yeyousheng7/github-multi-file-downloader
 // @version      1.1.0
-// @description:zh-CN  在 GitHub 仓库页面添加多文件下载按钮, 方便下载。
+// @description  在 GitHub 仓库页面勾选多个文件或文件夹，并将它们直接下载或打包为 ZIP。
+// @description:en Add checkboxes to GitHub repository file lists and download selected files or folders as individual files or ZIP archives.
 // @homepageURL  https://github.com/yeyousheng7/github-multi-file-downloader
 // @supportURL   https://github.com/yeyousheng7/github-multi-file-downloader/issues
 // @author       yyyyys
@@ -12,7 +13,7 @@
 // @match        https://github.com/*
 // @require      https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
-// @require      https://cdn.bootcdn.net/ajax/libs/sweetalert2/11.23.0/sweetalert2.all.min.js
+// @require      https://cdn.jsdelivr.net/npm/sweetalert2@11.23.0/dist/sweetalert2.all.min.js
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
