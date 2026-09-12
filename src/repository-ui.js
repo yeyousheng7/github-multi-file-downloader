@@ -1,4 +1,8 @@
-import { GITHUB_ROOT_ID, logger } from './config.js';
+import {
+    GITHUB_ROOT_ID,
+    githubSelectors,
+    logger,
+} from './config.js';
 import { openGitHubTokenDialog } from './dialogs.js';
 import { startDownload } from './download.js';
 import {
@@ -77,16 +81,16 @@ function registerMenuCommands() {
 
 // 在表格中添加复选框列，上一级目录行的复选框禁用，文件行的复选框可用
 function addCheckboxes(table) {
-    // 修复表头单元格，获取空单元格用于放置复选框(如果命中 commmit line)
+    // 所有页面都需要表头占位列，确保它与文件行新增的复选框列对齐。
+    // 仓库首页的原生表头高度为 0，空单元格不会额外撑开一行。
     const headerCell = ensureHeader(table);
-
 
     // 下面需要先处理上一级目录行，再处理其余文件行
     // 先后顺序不可调换，否则按钮禁用状态将无法正确设置
     // 当前逻辑依赖于 addCheckboxToRow 中的幂等检查，以跳过上一级目录行的重复添加
 
-    // 如果在子目录层级，禁用上一级目录的复选框
     const parentDirRow = findParentDirectoryRow(table);
+
     if (parentDirRow) {
         addCheckboxToRow(parentDirRow, true);
     }
@@ -99,7 +103,7 @@ function addCheckboxes(table) {
         addCheckboxToRow(row);
     }
 
-    addSelectAllCheckbox(table, headerCell);
+    addSelectAllCheckbox(table, headerCell, Boolean(parentDirRow));
 }
 
 function addCheckboxToRow(rowElement, disabled = false) {
@@ -119,32 +123,43 @@ function addCheckboxToRow(rowElement, disabled = false) {
     rowElement.insertBefore(cell, rowElement.firstElementChild);
 }
 
-function addSelectAllCheckbox(table, headerCell) {
-    if (table.querySelector('.tm-select-all-cb') ||
-        document.querySelector('.tm-select-all-cb')) {
+function addSelectAllCheckbox(table, headerCell, isSubdirectory) {
+    const target = isSubdirectory
+        ? headerCell
+        : githubSelectors.latestCommitAnchorCandidate
+            .map(selector => document.querySelector(selector))
+            .find(Boolean);
+
+    // GitHub 首页会分阶段渲染提交栏，目标尚未出现时等待下一次 DOM 变更重试。
+    if (!target) {
         return;
     }
+
+    const existingCheckbox = document.querySelector('.tm-select-all-cb');
+    if (existingCheckbox?.parentElement === target) {
+        return;
+    }
+
+    // SPA 页面切换时如果旧复选框仍在 DOM 中，删除后用当前 table 重新绑定事件。
+    existingCheckbox?.remove();
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.className = 'tm-select-all-cb';
+    if (!isSubdirectory) {
+        checkbox.classList.add('tm-select-all-cb--commit');
+    }
     checkbox.setAttribute('aria-label', '全选当前目录');
     checkbox.addEventListener('change', () => {
         setAllRowsSelected(table, checkbox.checked);
     });
 
-    const latestCommit = document.getElementById('latest-commit');
-
-    if (latestCommit) {
-        // 主页面
-        latestCommit.prepend(checkbox);
+    if (isSubdirectory) {
+        target.appendChild(checkbox);
         return;
     }
 
-    if (headerCell) {
-        // 文件夹页面 fallback
-        headerCell.appendChild(checkbox);
-    }
+    target.prepend(checkbox);
 }
 
 function setAllRowsSelected(table, checked) {

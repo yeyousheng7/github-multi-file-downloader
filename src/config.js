@@ -24,11 +24,10 @@ export const githubSelectors = {
     parentDirLinkCandidate: [
         'a[aria-label="Parent directory"]',
     ],
-    // 首页 latest commit 区块内部的稳定锚点
-    // TODO: 后续删除，如果确认没有存在必要
+    // latest commit 左侧内容区；不能使用右侧的 latest-commit-details 作为回退，
+    // 否则 GitHub 分阶段渲染时会把全选框插入 SHA/日期区域
     latestCommitAnchorCandidate: [
         '[data-testid="latest-commit"]',
-        '[data-testid="latest-commit-details"]',
     ],
     // 分支选择按钮
     refButtonCandidate: [
