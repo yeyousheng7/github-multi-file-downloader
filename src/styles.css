@@ -90,22 +90,27 @@ td.tm-left-cell {
     width: 32px !important;
     min-width: 32px !important;
     max-width: 32px !important;
+    padding: 0 !important;
+    line-height: 0 !important;
     vertical-align: middle !important;
     text-align: center !important;
 }
 
-th.tm-left-cell {
-    padding: 0 !important;
-}
-
 td.tm-left-cell {
-    padding: 4px 0 0 0 !important;
     background: inherit !important;
 }
 
-input.tm-left-cb {
-    margin: 0 !important;
-    display: inline-block !important;
+.tm-left-cell > input.tm-left-cb,
+.tm-left-cell > input.tm-select-all-cb {
+    display: block !important;
+    margin: 0 auto !important;
+    vertical-align: middle !important;
+}
+
+input.tm-select-all-cb--commit {
+    flex: 0 0 auto;
+    margin-left: -2.5px !important;
+    margin-right: 8px !important;
 }
 
 @media (prefers-color-scheme: dark) {
