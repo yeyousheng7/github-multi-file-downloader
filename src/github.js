@@ -1,5 +1,6 @@
 import {
     GITHUB_ORIGIN,
+    GITHUB_ROOT_ID,
     SETTINGS,
     githubSelectors,
     logger,
@@ -158,6 +159,31 @@ export function findRepositoryFileTable(root = document) {
     }
 
     return null;
+}
+
+/**
+ * 定位包含最近提交栏和文件表格的共同容器。
+ * GitHub 新版首页将提交栏移到了表格父容器之外。
+ *
+ * @param {HTMLTableElement} table
+ * @returns {HTMLElement|null}
+ */
+export function findRepositoryFileContainer(table) {
+    const tableContainer = table.parentElement;
+    const root = table.closest(`#${GITHUB_ROOT_ID}`) || document;
+    const latestCommit = queryFirst(githubSelectors.latestCommitAnchorCandidate, root);
+
+    if (!latestCommit) {
+        return tableContainer;
+    }
+
+    for (let container = tableContainer; container; container = container.parentElement) {
+        if (container.contains(latestCommit)) {
+            return container;
+        }
+    }
+
+    return tableContainer;
 }
 
 /**
