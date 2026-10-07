@@ -218,7 +218,10 @@ function ensureHeader(table) {
 
 // 在表格上方添加下载工具栏(下载按钮与状态显示)
 function addDownloadToolbar(table) {
-    const container = findRepositoryFileContainer(table);
+    const container = findParentDirectoryRow(table)
+        ? table.parentElement
+        : findRepositoryFileContainer(table);
+
     if (!container) {
         logger.warn('ui', '未找到表格容器元素, 退出');
         return;
